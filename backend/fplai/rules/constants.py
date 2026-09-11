@@ -117,15 +117,25 @@ CHIPS_PER_SET: frozenset[str] = frozenset(
 #: Only one chip may be played in any single gameweek.
 MAX_CHIPS_PER_GAMEWEEK = 1
 
+#: The first gameweek a transfer chip may be played in. Wildcard and Free Hit
+#: open at GW2, not GW1: transfers before the opening deadline are already
+#: unlimited, so there is nothing for the chip to buy. Confirmed from
+#: `start_event` on the `chips` block of `bootstrap-static/`.
+TRANSFER_CHIP_FIRST_GAMEWEEK = 2
+
+#: Team chips -- Bench Boost and Triple Captain -- are available from GW1.
+TEAM_CHIP_FIRST_GAMEWEEK = 1
+
+#: Which chips the API classes as `transfer` rather than `team` chips.
+TRANSFER_CHIPS: frozenset[str] = frozenset({Chip.WILDCARD, Chip.FREE_HIT})
+
 #: Whether a gameweek in which Wildcard or Free Hit was played still accrues
 #: the normal free transfer for the following gameweek.
 #:
-#: Confirmed for 2026/27: banked free transfers are *maintained* across a
-#: Wildcard or Free Hit rather than being reset to one. Whether the usual +1 is
-#: also credited on top could not be confirmed against the official rules page
-#: (fantasy.premierleague.com was unreachable from the build environment), so
-#: it is a named constant rather than an assumption buried in the code.
-#: UNVERIFIED -- see docs/rules-sources.md.
+#: Banked free transfers are *maintained* across a Wildcard or Free Hit rather
+#: than being reset to one. Whether the usual +1 is also credited on top is not
+#: stated in `game_settings`, so it stays a named constant: flipping it to
+#: False switches to the other reading. See docs/rules-sources.md.
 CHIP_GAMEWEEK_ACCRUES_FREE_TRANSFER = True
 
 # --- Scoring ---------------------------------------------------------------

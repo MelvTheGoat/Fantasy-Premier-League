@@ -2,18 +2,31 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from fplai.rules.chips import (
     available_chips,
     chip_deadline,
     chip_set_for_gameweek,
+    chip_windows_from_bootstrap,
+    default_chip_windows,
     expiring_chips,
     gameweeks_in_set,
     validate_chip_usage,
 )
 from fplai.rules.constants import Chip
 from fplai.rules.types import ChipUsage
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture
+def bootstrap():
+    return json.loads((FIXTURES / "bootstrap_static.json").read_text())
+
 
 ALL_CHIPS = {Chip.WILDCARD, Chip.FREE_HIT, Chip.BENCH_BOOST, Chip.TRIPLE_CAPTAIN}
 
@@ -38,9 +51,47 @@ class TestChipSets:
             chip_set_for_gameweek(0)
 
 
+class TestChipWindows:
+    """The windows come from `start_event` / `stop_event` on bootstrap-static."""
+
+    def test_the_coded_defaults_match_what_the_api_publishes(self, bootstrap):
+        key = lambda window: (str(window.chip), window.chip_set)  # noqa: E731
+        assert sorted(chip_windows_from_bootstrap(bootstrap), key=key) == sorted(
+            default_chip_windows(), key=key
+        )
+
+    def test_transfer_chips_open_at_gameweek_two(self):
+        windows = {(w.chip, w.chip_set): w for w in default_chip_windows()}
+        assert windows[(Chip.WILDCARD, 1)].start_gameweek == 2
+        assert windows[(Chip.FREE_HIT, 1)].start_gameweek == 2
+
+    def test_team_chips_open_at_gameweek_one(self):
+        windows = {(w.chip, w.chip_set): w for w in default_chip_windows()}
+        assert windows[(Chip.BENCH_BOOST, 1)].start_gameweek == 1
+        assert windows[(Chip.TRIPLE_CAPTAIN, 1)].start_gameweek == 1
+
+    def test_an_unrecognised_chip_in_the_payload_is_ignored(self):
+        """A new chip type must not break chip handling."""
+        payload = {"chips": [
+            {"name": "wildcard", "start_event": 2, "stop_event": 19},
+            {"name": "some_new_chip", "start_event": 1, "stop_event": 38},
+        ]}
+        windows = chip_windows_from_bootstrap(payload)
+        assert [w.chip for w in windows] == [Chip.WILDCARD]
+
+    def test_a_chip_entry_missing_its_window_is_skipped(self):
+        payload = {"chips": [{"name": "wildcard", "start_event": None, "stop_event": None}]}
+        assert chip_windows_from_bootstrap(payload) == ()
+
+
 class TestAvailability:
-    def test_all_four_chips_are_available_in_gameweek_one(self):
-        assert available_chips(1, []) == ALL_CHIPS
+    def test_transfer_chips_cannot_be_played_in_gameweek_one(self):
+        """Transfers before the opening deadline are unlimited anyway, so the
+        game does not offer Wildcard or Free Hit until GW2."""
+        assert available_chips(1, []) == {Chip.BENCH_BOOST, Chip.TRIPLE_CAPTAIN}
+
+    def test_all_four_chips_are_available_from_gameweek_two(self):
+        assert available_chips(2, []) == ALL_CHIPS
 
     def test_a_played_chip_is_gone_for_the_rest_of_its_set(self):
         used = [ChipUsage(Chip.WILDCARD, 8)]

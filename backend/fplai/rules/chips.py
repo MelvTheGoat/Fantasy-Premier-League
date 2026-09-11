@@ -15,9 +15,71 @@ from .constants import (
     CHIPS_PER_SET,
     FIRST_CHIP_SET_LAST_GAMEWEEK,
     SECOND_CHIP_SET_FIRST_GAMEWEEK,
+    TEAM_CHIP_FIRST_GAMEWEEK,
+    TRANSFER_CHIP_FIRST_GAMEWEEK,
+    TRANSFER_CHIPS,
     Chip,
 )
 from .types import ChipUsage, ValidationResult
+
+
+@dataclass(frozen=True, slots=True)
+class ChipWindow:
+    """The gameweeks one chip from one set may be played in.
+
+    The API publishes these on the `chips` block of `bootstrap-static/` as
+    `start_event` and `stop_event`, so `chip_windows_from_bootstrap` can
+    replace these defaults with whatever the game currently says.
+    """
+
+    chip: Chip
+    chip_set: int
+    start_gameweek: int
+    stop_gameweek: int
+
+    def covers(self, gameweek: int) -> bool:
+        return self.start_gameweek <= gameweek <= self.stop_gameweek
+
+
+def default_chip_windows(final_gameweek: int = 38) -> tuple[ChipWindow, ...]:
+    """The 2026/27 windows: two sets, split at GW19/GW20.
+
+    Transfer chips open at GW2 rather than GW1, because transfers before the
+    opening deadline are unlimited anyway and there is nothing to buy.
+    """
+    windows = []
+    for chip in sorted(CHIPS_PER_SET):
+        chip = Chip(chip)
+        first = (
+            TRANSFER_CHIP_FIRST_GAMEWEEK
+            if chip in TRANSFER_CHIPS
+            else TEAM_CHIP_FIRST_GAMEWEEK
+        )
+        windows.append(ChipWindow(chip, 1, first, FIRST_CHIP_SET_LAST_GAMEWEEK))
+        windows.append(
+            ChipWindow(chip, 2, SECOND_CHIP_SET_FIRST_GAMEWEEK, final_gameweek)
+        )
+    return tuple(windows)
+
+
+def chip_windows_from_bootstrap(bootstrap: dict) -> tuple[ChipWindow, ...]:
+    """Read the windows straight from `bootstrap-static/`.
+
+    Preferred over `default_chip_windows` wherever the payload is to hand: if
+    the game moves a chip's window mid-season, this follows it. Chips the rules
+    engine does not model are ignored rather than rejected, so a new chip type
+    cannot break chip validation.
+    """
+    known = {str(c) for c in CHIPS_PER_SET}
+    windows = []
+    for entry in bootstrap.get("chips") or []:
+        name = entry.get("name")
+        start, stop = entry.get("start_event"), entry.get("stop_event")
+        if name not in known or start is None or stop is None:
+            continue
+        chip_set = 1 if stop <= FIRST_CHIP_SET_LAST_GAMEWEEK else 2
+        windows.append(ChipWindow(Chip(name), chip_set, start, stop))
+    return tuple(windows)
 
 
 def chip_set_for_gameweek(gameweek: int) -> int:
@@ -35,18 +97,33 @@ def gameweeks_in_set(chip_set: int, final_gameweek: int = 38) -> range:
     raise ValueError(f"there are only two chip sets, got {chip_set}")
 
 
-def available_chips(gameweek: int, used: Sequence[ChipUsage]) -> set[Chip]:
+def available_chips(
+    gameweek: int,
+    used: Sequence[ChipUsage],
+    windows: Sequence[ChipWindow] | None = None,
+) -> set[Chip]:
     """Chips that may still be played in this gameweek.
 
     Only usage from the same set counts: a Wildcard played in GW8 does not stop
-    the second-set Wildcard being played in GW25.
+    the second-set Wildcard being played in GW25. A chip whose window has not
+    opened is excluded -- in GW1 that means Wildcard and Free Hit, which the
+    game does not offer until GW2.
     """
-    current_set = chip_set_for_gameweek(gameweek)
-    spent = {u.chip for u in used if chip_set_for_gameweek(u.gameweek) == current_set}
     if any(u.gameweek == gameweek for u in used):
         # A chip is already down for this gameweek, and only one is allowed.
         return set()
-    return {Chip(c) for c in CHIPS_PER_SET} - spent
+
+    current_set = chip_set_for_gameweek(gameweek)
+    spent = {u.chip for u in used if chip_set_for_gameweek(u.gameweek) == current_set}
+    windows = windows if windows is not None else default_chip_windows()
+
+    return {
+        window.chip
+        for window in windows
+        if window.chip_set == current_set
+        and window.covers(gameweek)
+        and window.chip not in spent
+    }
 
 
 def expiring_chips(gameweek: int, used: Sequence[ChipUsage]) -> set[Chip]:
@@ -143,7 +220,10 @@ def chip_deadline(
 
 __all__ = [
     "ChipDeadline",
+    "ChipWindow",
     "available_chips",
+    "chip_windows_from_bootstrap",
+    "default_chip_windows",
     "chip_deadline",
     "chip_set_for_gameweek",
     "expiring_chips",
