@@ -1,18 +1,24 @@
-"""Generates the recorded API payloads the ingestion tests run against.
+"""Constructs synthetic payloads for cases the real season does not contain yet.
 
-The live FPL API was unreachable from the build environment, so these payloads
-are written by hand to the documented shapes of `bootstrap-static/`,
-`fixtures/` and `event/{gw}/live/`. They are deliberately small -- four clubs
-and a handful of players -- but they carry every awkward case the ingestion
-code has to survive: a blank gameweek, a double gameweek, a player with an
-injury flag, and a `now_cost` that moves between gameweeks.
+Most ingestion tests run against genuine recorded API responses, written by
+`record_fixtures.py`. Blank and double gameweeks cannot come from there: the
+published fixture list is currently a clean 380 rows with one fixture per club
+per gameweek, because blanks and doubles only appear later in a season as cup
+progress forces postponements and rearrangements.
+
+So these are built by hand, deliberately, to the same shapes:
+
+    synthetic_bootstrap.json      six clubs, enough players to fill a squad
+    synthetic_fixtures.json       GW4 is a double for two clubs, a blank for two
+    synthetic_event_4_live.json   the matching live payload, with two `explain`
+                                  entries per player for the doubled clubs
 
 Regenerate with:
 
-    python tests/fixtures/build_fixtures.py
+    python tests/fixtures/build_synthetic_fixtures.py
 
-Once the API is reachable, replace these with a real recorded response; the
-ingestion tests assert on shape and derived values, not on the made-up numbers.
+Once the real fixture list contains a blank or a double, these can be replaced
+by a recording of it.
 """
 
 from __future__ import annotations
@@ -272,11 +278,11 @@ def main() -> None:
         ],
     }
 
-    write("bootstrap_static.json", bootstrap)
-    write("bootstrap_static_gw5.json", moved)
-    write("fixtures.json", fixtures())
-    write("event_3_live.json", live_single_gameweek())
-    write("event_4_live.json", live_double_gameweek())
+    write("synthetic_bootstrap.json", bootstrap)
+    write("synthetic_bootstrap_gw5.json", moved)
+    write("synthetic_fixtures.json", fixtures())
+    write("synthetic_event_3_live.json", live_single_gameweek())
+    write("synthetic_event_4_live.json", live_double_gameweek())
 
 
 def write(name: str, payload) -> None:
