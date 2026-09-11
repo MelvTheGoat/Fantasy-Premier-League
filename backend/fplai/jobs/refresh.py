@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 
 from ..data.client import FPLClient
 from ..data.ingest import (
+    ingest_element_summary,
     ingest_fixtures,
     ingest_gameweeks,
     ingest_live_gameweek,
@@ -99,6 +100,37 @@ def refresh_live(
     return rows
 
 
+def refresh_player_histories(
+    connection: sqlite3.Connection,
+    client: FPLClient,
+    *,
+    elements: list[int] | None = None,
+    progress_every: int = 50,
+) -> dict[str, int]:
+    """Pull every player's price history and past seasons from element-summary.
+
+    One request per player, so this is the slowest job by a wide margin -- at
+    the default one-second spacing, roughly eleven minutes for a full squad
+    list. It only needs running once before a backfill and occasionally after,
+    since the price history for past gameweeks never changes.
+    """
+    if elements is None:
+        elements = [row["id"] for row in connection.execute("SELECT id FROM players")]
+
+    totals = {"players": 0, "prices": 0, "seasons": 0}
+    for index, element in enumerate(elements, start=1):
+        summary = client.element_summary(element)
+        counts = ingest_element_summary(connection, element, summary)
+        totals["players"] += 1
+        totals["prices"] += counts["prices"]
+        totals["seasons"] += counts["seasons"]
+        if progress_every and index % progress_every == 0:
+            logger.info("element summaries: %d/%d", index, len(elements))
+
+    logger.info("player history refresh: %s", totals)
+    return totals
+
+
 def finalise_gameweek(
     connection: sqlite3.Connection,
     client: FPLClient,
@@ -133,6 +165,7 @@ def finalise_gameweek(
 
 __all__ = [
     "LIVE_CACHE_TTL",
+    "refresh_player_histories",
     "finalise_gameweek",
     "price_snapshot_gameweek",
     "refresh_live",
