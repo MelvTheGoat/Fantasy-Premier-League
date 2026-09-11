@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .constants import CAPTAIN_MULTIPLIER, Chip, TRIPLE_CAPTAIN_MULTIPLIER
+from .constants import CAPTAIN_MULTIPLIER, TRIPLE_CAPTAIN_MULTIPLIER, Chip
 from .types import Lineup, Results
 
 

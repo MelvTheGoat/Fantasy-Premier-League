@@ -8,10 +8,10 @@ so callers can read columns by name.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
 
 from ..config import settings
 
@@ -20,7 +20,7 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 def utcnow() -> str:
     """Timestamps are stored as ISO-8601 UTC so they sort as text."""
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def connect(path: Path | str | None = None) -> sqlite3.Connection:

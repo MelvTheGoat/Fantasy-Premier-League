@@ -15,13 +15,13 @@ from .chips import (
     validate_chip_usage,
 )
 from .constants import (
-    Chip,
     MAX_BANKED_FREE_TRANSFERS,
     MAX_PLAYERS_PER_CLUB,
-    Position,
     SQUAD_COMPOSITION,
     STARTING_BUDGET,
     TRANSFER_HIT_COST,
+    Chip,
+    Position,
 )
 from .pricing import profit, selling_price, squad_selling_value, squad_value
 from .scoring import (

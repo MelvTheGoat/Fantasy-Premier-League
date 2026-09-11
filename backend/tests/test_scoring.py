@@ -6,10 +6,8 @@ and assert only on what the manager-level rules do with them.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
-
-import pytest
 
 from fplai.rules.constants import Chip
 from fplai.rules.scoring import (
@@ -166,7 +164,7 @@ class TestLockdown:
     def test_a_late_kickoff_past_midnight_utc_uses_the_uk_day(self):
         """A 20:00 UK kickoff in summer is 19:00 UTC; the day after is still
         the day after in UK terms."""
-        last = datetime(2026, 8, 22, 19, 0, tzinfo=timezone.utc)
+        last = datetime(2026, 8, 22, 19, 0, tzinfo=UTC)
         assert lockdown_time(last).date() == datetime(2026, 8, 23).date()
 
     def test_points_are_provisional_before_lockdown(self):

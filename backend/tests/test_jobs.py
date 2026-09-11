@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -138,5 +138,5 @@ class TestFinalise:
 
     def test_a_gameweek_with_no_fixtures_is_never_final(self, db, client):
         refresh_reference(db, client, gameweek=4)
-        now = datetime(2027, 6, 1, tzinfo=timezone.utc)
+        now = datetime(2027, 6, 1, tzinfo=UTC)
         assert finalise_gameweek(db, client, 30, now=now) is False

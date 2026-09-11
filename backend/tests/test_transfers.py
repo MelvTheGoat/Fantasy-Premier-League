@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fplai.rules.constants import Chip, MAX_BANKED_FREE_TRANSFERS
+from fplai.rules.constants import MAX_BANKED_FREE_TRANSFERS, Chip
 from fplai.rules.transfers import (
     apply_transfers,
     build_transfer,

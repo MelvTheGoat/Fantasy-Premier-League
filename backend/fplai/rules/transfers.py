@@ -12,11 +12,11 @@ from dataclasses import dataclass
 
 from .constants import (
     CHIP_GAMEWEEK_ACCRUES_FREE_TRANSFER,
-    Chip,
     FREE_TRANSFERS_PER_GAMEWEEK,
     MAX_BANKED_FREE_TRANSFERS,
     TRANSFER_HIT_COST,
     UNLIMITED_TRANSFER_CHIPS,
+    Chip,
 )
 from .pricing import selling_price
 from .types import RuleViolation, Squad, SquadPick, Transfer

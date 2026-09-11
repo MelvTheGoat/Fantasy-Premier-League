@@ -8,14 +8,14 @@ Only one chip may be played in any gameweek.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 from .constants import (
     CHIPS_PER_SET,
-    Chip,
     FIRST_CHIP_SET_LAST_GAMEWEEK,
     SECOND_CHIP_SET_FIRST_GAMEWEEK,
+    Chip,
 )
 from .types import ChipUsage, ValidationResult
 
@@ -127,7 +127,9 @@ class ChipDeadline:
         return bool(self.unused) and self.gameweeks_remaining <= len(self.unused)
 
 
-def chip_deadline(gameweek: int, used: Sequence[ChipUsage], final_gameweek: int = 38) -> ChipDeadline:
+def chip_deadline(
+    gameweek: int, used: Sequence[ChipUsage], final_gameweek: int = 38
+) -> ChipDeadline:
     chip_set = chip_set_for_gameweek(gameweek)
     last = FIRST_CHIP_SET_LAST_GAMEWEEK if chip_set == 1 else final_gameweek
     spent = {u.chip for u in used if chip_set_for_gameweek(u.gameweek) == chip_set}

@@ -12,18 +12,18 @@ illegal XI, and the auto-substitution rules need the XI check on its own.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from .constants import (
     BENCH_SIZE,
     FORMATION_MAX,
     FORMATION_MIN,
     MAX_PLAYERS_PER_CLUB,
-    Position,
     SQUAD_COMPOSITION,
     SQUAD_SIZE,
     STARTING_BUDGET,
     STARTING_XI_SIZE,
+    Position,
 )
 from .types import (
     Lineup,

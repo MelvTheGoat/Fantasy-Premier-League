@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from .autosubs import apply_auto_subs
 from .captaincy import CaptaincyOutcome, resolve_captaincy
-from .constants import Chip, LOCKDOWN_HOUR_UK, LOCKDOWN_TIMEZONE
+from .constants import LOCKDOWN_HOUR_UK, LOCKDOWN_TIMEZONE, Chip
 from .types import Lineup, Results, Roster, Substitution
 
 

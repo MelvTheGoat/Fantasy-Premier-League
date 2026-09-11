@@ -7,10 +7,10 @@ player is either its identity (element id), its position, its club, or a price.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Iterable, Iterator, Mapping, Sequence
 
-from .constants import BENCH_SIZE, Chip, Position, SQUAD_SIZE, STARTING_XI_SIZE
+from .constants import BENCH_SIZE, SQUAD_SIZE, STARTING_XI_SIZE, Chip, Position
 
 
 @dataclass(frozen=True, slots=True)

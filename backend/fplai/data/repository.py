@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime
-from typing import Iterable, Sequence
 
 from ..rules.constants import Chip, Position
 from ..rules.pricing import selling_price

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..data.client import FPLClient
 from ..data.ingest import (
@@ -90,7 +90,7 @@ def finalise_gameweek(
     Returns False and changes nothing if lockdown has not been reached, so the
     job can be scheduled optimistically and simply do nothing when early.
     """
-    moment = now or datetime.now(timezone.utc)
+    moment = now or datetime.now(UTC)
     kickoff = last_kickoff(connection, gameweek)
 
     if not is_final(kickoff, moment):
@@ -103,7 +103,8 @@ def finalise_gameweek(
     ingest_gameweeks(connection, bootstrap)
     ingest_players(connection, bootstrap, gameweek=gameweek + 1)
     ingest_fixtures(connection, client.fixtures(ttl_seconds=LIVE_CACHE_TTL))
-    ingest_live_gameweek(connection, gameweek, client.event_live(gameweek, ttl_seconds=LIVE_CACHE_TTL))
+    live = client.event_live(gameweek, ttl_seconds=LIVE_CACHE_TTL)
+    ingest_live_gameweek(connection, gameweek, live)
 
     logger.info("GW%d finalised", gameweek)
     return True

@@ -11,7 +11,7 @@ from __future__ import annotations
 from fplai.rules.autosubs import apply_auto_subs
 from fplai.rules.squad import format_formation, is_valid_formation
 
-from .conftest import build_lineup, build_roster, results_for
+from .conftest import build_lineup, results_for
 
 #: The default lineup is 1 GK, 3 DEF, 5 MID, 2 FWD on the pitch, with a
 #: substitute keeper plus two defenders and a midfielder on the bench.

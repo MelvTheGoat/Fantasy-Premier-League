@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fplai.rules.constants import MAX_PLAYERS_PER_CLUB, Position, STARTING_BUDGET
+from fplai.rules.constants import MAX_PLAYERS_PER_CLUB, STARTING_BUDGET, Position
 from fplai.rules.squad import (
     format_formation,
     formation_of,
@@ -26,8 +26,9 @@ from .conftest import (
 
 class TestSquadComposition:
     def test_a_correctly_shaped_squad_is_valid(self, roster):
-        squad = build_squad(roster=roster, bank=STARTING_BUDGET)
-        squad = Squad(picks=squad.picks, bank=STARTING_BUDGET - sum(p.purchase_price for p in squad.picks))
+        built = build_squad(roster=roster)
+        spend = sum(p.purchase_price for p in built.picks)
+        squad = Squad(picks=built.picks, bank=STARTING_BUDGET - spend)
         assert validate_squad(squad, roster).ok
 
     def test_squad_must_have_fifteen_players(self, roster):
@@ -37,9 +38,18 @@ class TestSquadComposition:
     @pytest.mark.parametrize(
         ("elements", "why"),
         [
-            ((101, 102, 103, 201, 202, 203, 204, 301, 302, 303, 304, 305, 401, 402, 403), "three keepers"),
-            ((101, 102, 201, 202, 203, 204, 301, 302, 303, 304, 305, 401, 402, 403, 404), "four defenders"),
-            ((101, 102, 201, 202, 203, 204, 205, 301, 302, 303, 304, 401, 402, 403, 404), "four midfielders"),
+            (
+                (101, 102, 103, 201, 202, 203, 204, 301, 302, 303, 304, 305, 401, 402, 403),
+                "three keepers",
+            ),
+            (
+                (101, 102, 201, 202, 203, 204, 301, 302, 303, 304, 305, 401, 402, 403, 404),
+                "four defenders",
+            ),
+            (
+                (101, 102, 201, 202, 203, 204, 205, 301, 302, 303, 304, 401, 402, 403, 404),
+                "four midfielders",
+            ),
         ],
     )
     def test_squad_must_match_2_5_5_3(self, roster, elements, why):

@@ -30,7 +30,8 @@ from typing import Any
 
 import httpx
 
-from ..config import Settings, settings as default_settings
+from ..config import Settings
+from ..config import settings as default_settings
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,9 @@ class FPLClient:
         """Players, teams, positions, prices, gameweeks and gameweek averages."""
         return self.get("bootstrap-static/", ttl_seconds=ttl_seconds)
 
-    def fixtures(self, *, gameweek: int | None = None, ttl_seconds: int | None = None) -> list[dict]:
+    def fixtures(
+        self, *, gameweek: int | None = None, ttl_seconds: int | None = None
+    ) -> list[dict]:
         """Every fixture, or just one gameweek's.
 
         Fetched whole by default, because detecting blanks and doubles means

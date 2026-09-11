@@ -9,7 +9,7 @@ free transfers banking and being spent across a run of gameweeks.
 from __future__ import annotations
 
 from fplai.rules.chips import available_chips, validate_chip_usage
-from fplai.rules.constants import Chip, STARTING_BUDGET
+from fplai.rules.constants import STARTING_BUDGET, Chip
 from fplai.rules.pricing import selling_price, squad_value
 from fplai.rules.scoring import score_gameweek, summarise_season
 from fplai.rules.squad import validate_lineup, validate_squad
@@ -72,7 +72,7 @@ class TestSellingPriceAcrossTransfers:
     def test_squad_value_tracks_sale_prices_not_market_prices(self):
         roster = build_roster()
         squad = starting_squad(roster, bank=50)
-        risen = {e: p.purchase_price + 4 for e, p in zip(squad.elements, squad.picks)}
+        risen = {p.element: p.purchase_price + 4 for p in squad.picks}
         # Every player keeps half of a £0.4m rise, so £0.2m each across fifteen.
         assert squad_value(squad, risen) == sum(
             p.purchase_price + 2 for p in squad.picks
