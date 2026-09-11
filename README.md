@@ -28,9 +28,10 @@ Built so far, with tests:
 - [ ] Frontend
 - [ ] Scheduled jobs and live updates
 
-See [`docs/rules-sources.md`](docs/rules-sources.md) for where every rule came
-from, and for the three values that could not be verified against the official
-source at build time.
+Every rule is verified against the live FPL API, which publishes the game's own
+settings — see [`docs/rules-sources.md`](docs/rules-sources.md) for the field
+behind each one, two API changes for 2026/27 that invalidate older approaches,
+and the single value still unconfirmed.
 
 ## Setup
 
@@ -46,8 +47,17 @@ Run the tests:
 pytest
 ```
 
-They need no network and no database — the rules engine is pure logic, and
-ingestion runs against recorded API payloads in `tests/fixtures/`.
+They need no network and no database. The rules engine is pure logic, and
+ingestion runs against real recorded API responses in `tests/fixtures/`,
+refreshed with:
+
+```sh
+python tests/fixtures/record_fixtures.py           # real, trimmed responses
+python tests/fixtures/build_synthetic_fixtures.py  # blank/double gameweeks
+```
+
+Blank and double gameweeks are constructed rather than recorded, because the
+published fixture list has none yet this season.
 
 ## Running the jobs by hand
 
@@ -88,7 +98,7 @@ Everything is an environment variable with a sensible default (see
 | `FPLAI_CACHE_TTL` | `3600` | Default cache freshness, in seconds |
 | `FPLAI_PLANNING_HORIZON` | `5` | Gameweeks the projections look ahead |
 | `FPLAI_HIT_MARGIN` | `2.0` | Points a transfer must clear *above* the 4-point hit |
-| `FPLAI_SHIRT_BASE_URL` | — | Club shirt CDN; **unverified**, see the rules doc |
+| `FPLAI_SHIRT_BASE_URL` | FPL shirt CDN | Club shirt images, keyed by team code |
 
 The API is public and unauthenticated, which is exactly why the client is
 careful with it: every response is cached on disk, requests are spaced by
