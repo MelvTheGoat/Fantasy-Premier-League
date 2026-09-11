@@ -14,6 +14,13 @@ PRAGMA foreign_keys = ON;
 
 -- --- Reference data from bootstrap-static ---------------------------------
 
+-- Strength ratings are stored as the API sends them, but note what it sends
+-- for 2026/27: `strength_overall_home` / `_away` are a 1-5 rating, and the
+-- four granular attack/defence columns are zero for every club -- FPL stopped
+-- publishing them. The projection model therefore derives attacking and
+-- defensive strength from fixture difficulty and actual results, not from
+-- these columns. They are kept so that if FPL starts populating them again,
+-- ingestion picks them up without a migration.
 CREATE TABLE IF NOT EXISTS teams (
     id              INTEGER PRIMARY KEY,
     code            INTEGER NOT NULL,   -- used to build shirt image URLs

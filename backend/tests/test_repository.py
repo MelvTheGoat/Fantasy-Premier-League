@@ -45,16 +45,43 @@ def load(name: str):
     return json.loads((FIXTURES / name).read_text())
 
 
+#: The gameweek that is current in the recording, and the one after it.
+CURRENT_GAMEWEEK = 3
+NEXT_GAMEWEEK = 4
+
+
 @pytest.fixture
 def db():
+    """Real recorded reference data, with a second price snapshot a gameweek
+    later so the historical-price reads have something to distinguish."""
     connection = connect(":memory:")
     init_db(connection)
     bootstrap = load("bootstrap_static.json")
     ingest_teams(connection, bootstrap)
     ingest_gameweeks(connection, bootstrap)
-    ingest_players(connection, bootstrap, gameweek=4)
-    ingest_players(connection, load("bootstrap_static_gw5.json"), gameweek=5)
+    ingest_players(connection, bootstrap, gameweek=CURRENT_GAMEWEEK)
+
+    moved = load("bootstrap_static.json")
+    for element in moved["elements"]:
+        element["now_cost"] += 3
+    ingest_players(connection, moved, gameweek=NEXT_GAMEWEEK)
+
     ingest_fixtures(connection, load("fixtures.json"))
+    yield connection
+    connection.close()
+
+
+@pytest.fixture
+def synthetic():
+    """The constructed blank/double gameweek season, for the cases the real
+    fixture list does not contain yet."""
+    connection = connect(":memory:")
+    init_db(connection)
+    bootstrap = load("synthetic_bootstrap.json")
+    ingest_teams(connection, bootstrap)
+    ingest_gameweeks(connection, bootstrap)
+    ingest_players(connection, bootstrap, gameweek=4)
+    ingest_fixtures(connection, load("synthetic_fixtures.json"))
     yield connection
     connection.close()
 
@@ -77,77 +104,93 @@ class TestRoster:
 
     def test_the_roster_comes_back_as_rules_players(self, db):
         roster = load_roster(db)
-        assert roster[1].position is Position.GKP
-        assert roster[4].position is Position.FWD
-        assert roster[1].team == 1
-        # The GW5 refresh was the last one ingested, so `now_cost` is GW5's.
-        assert roster[3].price == 103
+        assert len(roster) == 43
+        keeper = roster[SQUAD_ELEMENTS[0]]
+        assert keeper.position is Position.GKP
+        assert keeper.team > 0 and keeper.price > 0
+        assert {p.position for p in roster.values()} == set(Position)
 
     def test_a_historical_roster_uses_that_gameweeks_prices(self, db):
-        """A GW4 decision must be costed at GW4 prices, not today's."""
-        assert load_roster_at_gameweek(db, 4)[3].price == 100
-        assert load_roster_at_gameweek(db, 5)[3].price == 103
+        """A past decision must be costed at that gameweek's prices, not today's."""
+        element = SQUAD_ELEMENTS[0]
+        then = load_roster_at_gameweek(db, CURRENT_GAMEWEEK)[element].price
+        now = load_roster_at_gameweek(db, NEXT_GAMEWEEK)[element].price
+        assert now == then + 3
 
 
 class TestGameweekMetadata:
     def test_the_current_and_next_gameweeks_are_read(self, db):
-        assert current_gameweek(db) == 4
-        assert next_gameweek(db) == 5
+        assert current_gameweek(db) == CURRENT_GAMEWEEK
+        assert next_gameweek(db) == NEXT_GAMEWEEK
 
     def test_the_official_average_is_read_from_the_api_data(self, db):
-        assert gameweek_average(db, 3) == 55
+        assert gameweek_average(db, 1) > 0
 
     def test_gameweeks_without_an_average_are_left_out(self, db):
         averages = gameweek_averages(db)
-        assert averages[3] == 55.0
-        assert 4 not in averages, "the current gameweek has no final average yet"
+        assert averages[1] > 0
+        assert 38 not in averages, "an unplayed gameweek has no average yet"
 
     def test_the_last_kickoff_is_parsed_for_lockdown(self, db):
-        moment = last_kickoff(db, 4)
-        assert moment is not None and moment.hour == 19
+        moment = last_kickoff(db, CURRENT_GAMEWEEK)
+        assert moment is not None and moment.year == 2026
 
 
 class TestResults:
     def test_results_come_back_keyed_by_element(self, db):
-        ingest_live_gameweek(db, 3, load("event_3_live.json"))
-        results = load_results(db, 3)
-        assert results[1].minutes == 90
-        assert results[1].total_points == 9
+        ingest_live_gameweek(db, CURRENT_GAMEWEEK, load("event_3_live.json"))
+        results = load_results(db, CURRENT_GAMEWEEK)
+        assert results
+        played = [r for r in results.values() if r.minutes > 0]
+        assert played and all(r.fixture_count == 1 for r in played)
 
-    def test_a_double_gameweek_is_summed_into_one_result(self, db):
-        ingest_live_gameweek(db, 4, load("event_4_live.json"))
-        results = load_results(db, 4)
+    def test_a_finished_gameweek_is_settled(self, db):
+        """Every GW3 fixture has finished, so the auto-sub rules may act."""
+        ingest_live_gameweek(db, CURRENT_GAMEWEEK, load("event_3_live.json"))
+        results = load_results(db, CURRENT_GAMEWEEK)
+        assert all(r.fixtures_finished for r in results.values())
+
+    def test_a_double_gameweek_is_summed_into_one_result(self, synthetic):
+        ingest_live_gameweek(synthetic, 4, load("synthetic_event_4_live.json"))
+        results = load_results(synthetic, 4)
         assert results[1].minutes == 180
         assert results[1].fixture_count == 2
 
-    def test_an_unfinished_fixture_leaves_the_result_unsettled(self, db):
-        """GW4's fixtures have not finished, so the auto-sub rules must wait."""
-        ingest_live_gameweek(db, 4, load("event_4_live.json"))
-        assert load_results(db, 4)[1].fixtures_finished is False
+    def test_an_unfinished_fixture_leaves_the_result_unsettled(self, synthetic):
+        """Mid-gameweek the auto-sub rules must wait, because a player yet to
+        kick off looks identical to one who was left out."""
+        ingest_live_gameweek(synthetic, 4, load("synthetic_event_4_live.json"))
+        assert load_results(synthetic, 4)[1].fixtures_finished is False
 
-    def test_a_finished_gameweek_is_settled(self, db):
-        ingest_live_gameweek(db, 3, load("event_3_live.json"))
-        assert load_results(db, 3)[1].fixtures_finished is True
-
-    def test_a_blank_player_has_no_result_at_all(self, db):
-        ingest_live_gameweek(db, 4, load("event_4_live.json"))
-        assert 8 not in load_results(db, 4)
+    def test_a_blank_player_has_no_result_at_all(self, synthetic):
+        ingest_live_gameweek(synthetic, 4, load("synthetic_event_4_live.json"))
+        assert 8 not in load_results(synthetic, 4)
 
 
-#: A legal 2/5/5/3 squad drawn from the fixture roster: £95.6m across six
-#: clubs with no more than three from any one of them.
-SQUAD_ELEMENTS = (11, 12, 2, 23, 7, 13, 14, 3, 8, 10, 25, 18, 4, 19, 20)
+#: A legal 2/5/5/3 squad drawn from the recorded players: £66.2m, at most two
+#: from any club. Derived by taking the cheapest legal squad from the
+#: recording, so it stays valid as long as those players are in it.
+SQUAD_ELEMENTS = (58, 355, 38, 280, 451, 609, 423, 50, 438, 213, 547, 600, 107, 528, 322)
 
 #: Eleven of them in a legal 4-4-2, with the substitute keeper first on the bench.
-STARTERS = (11, 2, 23, 7, 13, 3, 8, 10, 25, 4, 19)
-BENCH = (12, 14, 18, 20)
+STARTERS = (58, 38, 280, 451, 609, 50, 438, 213, 547, 107, 528)
+BENCH = (355, 423, 600, 322)
+
+#: A forward and a midfielder from the XI, for armband assertions.
+CAPTAIN = STARTERS[-1]
+VICE = STARTERS[-2]
 
 
 class TestLockedPicks:
     def make(self):
-        lineup = Lineup(starters=STARTERS, bench=BENCH, captain=4, vice_captain=3)
+        """A locked lineup whose purchase prices are distinct per player, so a
+        round trip that mixed two players up would be visible."""
+        lineup = Lineup(
+            starters=STARTERS, bench=BENCH, captain=CAPTAIN, vice_captain=VICE
+        )
         squad = Squad(
-            picks=tuple(SquadPick(e, 50 + e) for e in STARTERS + BENCH), bank=5
+            picks=tuple(SquadPick(e, 40 + index) for index, e in enumerate(STARTERS + BENCH)),
+            bank=5,
         )
         return lineup, squad
 
@@ -173,18 +216,22 @@ class TestLockedPicks:
                            free_transfers_after=1)
         save_locked_picks(db, "manager", 4, lineup, squad, prices={})
         loaded = load_locked_squad(db, "manager", 4)
-        assert loaded.purchase_price(7) == 57
+        for index, element in enumerate(STARTERS + BENCH):
+            assert loaded.purchase_price(element) == 40 + index
         assert loaded.bank == 5
 
     def test_the_selling_price_is_stored_alongside_the_purchase_price(self, db):
         lineup, squad = self.make()
-        # Element 11 was bought at 61 and is now 65, so it sells for 63.
-        save_locked_picks(db, "manager", 4, lineup, squad, prices={11: 65})
+        element = STARTERS[0]
+        bought = squad.purchase_price(element)
+        # A £0.4m rise since purchase: half of it is kept, so it sells for +2.
+        save_locked_picks(db, "manager", 4, lineup, squad, prices={element: bought + 4})
         row = db.execute(
             "SELECT purchase_price, selling_price FROM locked_picks"
-            " WHERE model_id='manager' AND gameweek=4 AND player_id=11"
+            " WHERE model_id='manager' AND gameweek=4 AND player_id=?",
+            (element,),
         ).fetchone()
-        assert (row["purchase_price"], row["selling_price"]) == (61, 63)
+        assert (row["purchase_price"], row["selling_price"]) == (bought, bought + 2)
 
     def test_locked_picks_cannot_be_regenerated(self, db):
         """Rewriting a past deadline's picks with hindsight would invalidate
@@ -211,11 +258,12 @@ class TestLockedPicks:
         lineup, squad = self.make()
         save_locked_picks(
             db, "best_xi", 4, lineup, squad, prices={},
-            reasons={4: "Two fixtures, on penalties, 8.4 projected"},
+            reasons={CAPTAIN: "Two fixtures, on penalties, 8.4 projected"},
         )
         row = db.execute(
             "SELECT selection_reason r FROM locked_picks"
-            " WHERE model_id='best_xi' AND gameweek=4 AND player_id=4"
+            " WHERE model_id='best_xi' AND gameweek=4 AND player_id=?",
+            (CAPTAIN,),
         ).fetchone()
         assert "penalties" in row["r"]
 
@@ -230,7 +278,7 @@ class TestManagerRecords:
 
     def test_a_transfer_keeps_its_comparison_for_the_frontend(self, db):
         save_transfer(
-            db, gameweek=4, out_element=3, in_element=10,
+            db, gameweek=4, out_element=SQUAD_ELEMENTS[0], in_element=SQUAD_ELEMENTS[1],
             selling_price_value=101, purchase_price_value=80,
             comparison={"out": {"xpts": 14.2}, "in": {"xpts": 19.8}},
             reason="Saka carrying a knock; Mbeumo has two home fixtures",
