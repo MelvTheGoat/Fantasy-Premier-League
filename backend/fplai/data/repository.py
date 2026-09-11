@@ -119,6 +119,30 @@ def last_kickoff(connection: sqlite3.Connection, gameweek: int) -> datetime | No
     return _parse(row["last_kickoff_time"])
 
 
+def gameweeks_underway(
+    connection: sqlite3.Connection, now: datetime
+) -> list[int]:
+    """Gameweeks whose deadline has passed and which have fixtures to play.
+
+    Deadlines are parsed and compared as datetimes rather than as the text they
+    are stored in, so a caller can ask the question against any moment -- which
+    is what lets the scheduler's timing be tested without moving the clock.
+    """
+    candidates = [
+        row["id"]
+        for row in connection.execute(
+            "SELECT id FROM gameweeks"
+            " WHERE EXISTS (SELECT 1 FROM fixtures WHERE fixtures.gameweek = gameweeks.id)"
+            " ORDER BY id"
+        )
+    ]
+    return [
+        gameweek
+        for gameweek in candidates
+        if (when := deadline(connection, gameweek)) is not None and when <= now
+    ]
+
+
 def gameweek_average(connection: sqlite3.Connection, gameweek: int) -> int | None:
     """The official FPL average, straight from `average_entry_score`."""
     row = connection.execute(

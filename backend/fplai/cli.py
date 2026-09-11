@@ -9,6 +9,8 @@
     fplai score [--gameweek N]        rescore stored picks
     fplai finalise --gameweek N       final points and the official average
     fplai status                      what the database currently knows
+    fplai seed                        fill an empty database from scratch
+    fplai schedule                    run the scheduler in the foreground
 """
 
 from __future__ import annotations
@@ -26,16 +28,17 @@ from .data.repository import (
     gameweek_average,
     next_gameweek,
 )
-from .jobs.backfill import backfill, resume_state
+from .jobs.backfill import backfill
 from .jobs.live import update_live
+from .jobs.pick import lock_gameweek
 from .jobs.refresh import (
     finalise_gameweek,
     refresh_player_histories,
     refresh_reference,
 )
+from .jobs.scheduler import TICK_SECONDS, run_forever
 from .jobs.score import score_gameweek_for_all_models, score_season, season_summaries
-from .model.projections import project_for_gameweek, save_projections
-from .strategy import best_xi, manager
+from .jobs.seed import seed, setup_progress
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,6 +78,20 @@ def build_parser() -> argparse.ArgumentParser:
     finalise.add_argument("--gameweek", type=int, required=True)
 
     subparsers.add_parser("status", help="show what the database currently knows")
+
+    seeding = subparsers.add_parser(
+        "seed", help="fill an empty database: reference data, history, backfill, scores"
+    )
+    seeding.add_argument(
+        "--limit", type=int, help="only fetch this many players' histories"
+    )
+
+    schedule = subparsers.add_parser(
+        "schedule", help="run the scheduler in the foreground"
+    )
+    schedule.add_argument(
+        "--interval", type=int, default=TICK_SECONDS, help="seconds between ticks"
+    )
     return parser
 
 
@@ -102,6 +119,13 @@ def main(argv: list[str] | None = None) -> int:
 def _dispatch(args, connection) -> int:
     """Route to the job. Commands that need the network open a client; the
     rest work entirely from what has already been ingested."""
+    if args.command == "schedule":
+        # Opens its own connection and its own client each tick, because it
+        # outlives this call rather than being one job.
+        print(f"scheduler running, ticking every {args.interval}s -- ^C to stop")
+        run_forever(interval=args.interval)
+        return 0
+
     offline = {
         "init-db": _init_db,
         "status": _status,
@@ -148,6 +172,11 @@ def _dispatch(args, connection) -> int:
             print(f"GW{result['gameweek']}: {result['rows']} rows, {scores} ({label})")
             return 0
 
+        if args.command == "seed":
+            progress = seed(connection, client, history_limit=args.limit)
+            print(f"{progress['message'].lower()}: {progress['stage']}")
+            return 0
+
         if args.command == "finalise":
             if finalise_gameweek(connection, client, args.gameweek):
                 score_gameweek_for_all_models(connection, args.gameweek)
@@ -179,17 +208,11 @@ def _backfill(args, connection) -> int:
 
 
 def _pick(args, connection) -> int:
-    projections = project_for_gameweek(connection, args.gameweek, horizon=args.horizon)
-    save_projections(connection, args.gameweek, projections)
-
-    selection = best_xi.lock_gameweek(
-        connection, args.gameweek, projections=projections
+    result = lock_gameweek(connection, args.gameweek, horizon=args.horizon)
+    print(
+        f"GW{args.gameweek} locked: Best XI {result['best_xi_expected']:.1f} "
+        f"projected, Manager made {int(result['manager_transfers'])} transfer(s)"
     )
-    print(f"Best XI locked: {selection.expected_points:.1f} projected")
-
-    state = resume_state(connection, args.gameweek)
-    manager.lock_gameweek(connection, args.gameweek, state, projections=projections)
-    print(f"Manager locked for GW{args.gameweek}")
     return 0
 
 
@@ -222,7 +245,10 @@ def _status(args, connection) -> int:
     ).fetchone()["c"]
     finished = finished_gameweeks(connection)
 
+    progress = setup_progress(connection)
+
     print(f"database:  {settings.database_path}")
+    print(f"setup:     {progress['message']}")
     print(f"players:   {players}")
     print(f"fixtures:  {fixtures}")
     print(f"current:   GW{current_gameweek(connection)}")
@@ -230,10 +256,8 @@ def _status(args, connection) -> int:
     print(f"finished:  {len(finished)} gameweeks")
     print(f"locked:    {locked} gameweeks of picks")
 
-    if not players:
-        print("\nnothing ingested yet -- run `fplai refresh`")
-    elif not locked:
-        print("\nno picks yet -- run `fplai backfill`")
+    if not progress["ready"]:
+        print("\nnot ready yet -- run `fplai seed`")
     return 0
 
 
