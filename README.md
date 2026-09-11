@@ -249,18 +249,49 @@ serves what they already decided, so a slow request can never delay a deadline.
 
 ## Deployment
 
-The backend is a FastAPI app over a SQLite file, so it runs on anything with a
-disk. The frontend builds to static files.
+Once the frontend is built, the API serves it too, so the whole site is **one
+service on one URL** — no CORS, no separate static host:
 
 ```sh
 cd frontend && npm run build        # -> frontend/dist
 cd backend && python -m fplai.api.app
 ```
 
-Serve `frontend/dist` from any static host and point `/api` at the backend. In
-development Vite proxies `/api` to `http://127.0.0.1:8000`, so the frontend uses
-same-origin paths in both cases and nothing changes between them.
+Open `http://localhost:8000`. In development Vite serves the frontend itself
+and proxies `/api` to port 8000, so the frontend uses same-origin paths in both
+cases and nothing changes between them.
 
-The three jobs need a scheduler — cron, systemd timers, or a hosted equivalent.
-See the crontab above. The database is a single file; back it up and the whole
-season's record travels with it.
+### With Docker
+
+```sh
+docker build -t fplai .
+docker run -p 8000:8000 -v fplai-data:/data fplai
+```
+
+The volume matters: the season's entire record is one SQLite file, and a
+container without it starts empty. Back up that file and everything travels
+with it.
+
+Seed a fresh deployment by running the jobs inside the container:
+
+```sh
+docker exec -it <container> python -m fplai.cli refresh
+docker exec -it <container> python -m fplai.cli history
+docker exec -it <container> python -m fplai.cli backfill
+docker exec -it <container> python -m fplai.cli score
+```
+
+### Hosting it
+
+Anything that runs a container with a persistent disk will do. The app is
+small — one process, a few hundred MB of RAM, and a database measured in
+megabytes — so the smallest tier of anything is enough. What it needs:
+
+- **A persistent volume** mounted at `/data`. Without one, every restart wipes
+  the season.
+- **A scheduler** for the three jobs. Either the crontab above on the host, or
+  the platform's own scheduled-task feature running the same `fplai` commands
+  against the same volume.
+- **Outbound HTTPS** to `fantasy.premierleague.com`.
+
+`PORT` is read from the environment, which is what most platforms set.

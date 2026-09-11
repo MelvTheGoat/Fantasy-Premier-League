@@ -197,3 +197,19 @@ class TestPlayerDetail:
 
     def test_a_player_not_in_the_squad_is_a_404(self, client):
         assert client.get("/api/best_xi/gameweek/3/player/999999").status_code == 404
+
+
+class TestFrontendServing:
+    """When the frontend has been built, the API serves it too, so the whole
+    site runs as one service on one URL."""
+
+    def test_an_unknown_api_path_is_a_json_404(self, client):
+        """Not an HTML page with a 200. A typo'd endpoint answered with
+        index.html is a miserable thing to debug from the frontend."""
+        response = client.get("/api/does-not-exist")
+        assert response.status_code == 404
+        assert response.headers["content-type"].startswith("application/json")
+
+    def test_api_routes_still_win_over_the_catch_all(self, client):
+        assert client.get("/api/health").status_code == 200
+        assert client.get("/api/manager/season").status_code == 200

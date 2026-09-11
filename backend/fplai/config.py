@@ -56,6 +56,12 @@ class Settings:
 
     final_gameweek: int = _env_int("FPLAI_FINAL_GAMEWEEK", 38)
 
+    #: The built frontend. When present, the API serves it too, so the whole
+    #: site runs as one service on one URL.
+    frontend_dist: Path = _env_path(
+        "FPLAI_FRONTEND_DIST", PROJECT_ROOT.parent / "frontend" / "dist"
+    )
+
     #: Base for club shirt images. The team *code* (not the team id) and the
     #: goalkeeper `_1` variant are substituted in by `fplai.data.assets`.
     #: Confirmed against the live CDN.
