@@ -27,7 +27,11 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
     target = Path(path) if path is not None else settings.database_path
     if str(target) != ":memory:":
         target.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(target, isolation_level=None)
+    # `check_same_thread=False` because the API serves sync endpoints from a
+    # worker threadpool, so the thread that opens a connection is not always
+    # the one that uses it. SQLite's default threading mode is serialized, so
+    # sharing a connection this way is safe.
+    connection = sqlite3.connect(target, isolation_level=None, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
