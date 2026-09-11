@@ -210,9 +210,18 @@ def main() -> None:
 
     Also reachable as `python -m fplai.api.app`.
     """
+    import logging
     import os
 
     import uvicorn
+
+    # Uvicorn configures its own loggers and leaves the root logger alone, so
+    # without this the scheduler runs silently -- no record of a squad being
+    # locked, and no trace of a job that failed.
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     settings.ensure_directories()
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

@@ -3,16 +3,14 @@ name = "fplai"
 version = "0.1.0"
 description = "Two automated Fantasy Premier League squads scored against real FPL points"
 requires-python = ">=3.11"
+# Four, and they earn their place. The projection is arithmetic over the
+# standard library, not a fitted model, so there is no pandas, numpy or
+# scikit-learn here -- which is also why the deployed image is small.
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
-    "pandas>=2.2",
-    "numpy>=1.26",
     "pulp>=2.9",
-    "scikit-learn>=1.5",
-    "lightgbm>=4.5",
-    "python-dateutil>=2.9",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +25,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["fplai*"]
+
+# The schema travels with the package: `init_db` reads it at runtime, so an
+# installed copy without it cannot open a database.
+[tool.setuptools.package-data]
+fplai = ["data/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

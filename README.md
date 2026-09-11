@@ -28,6 +28,7 @@ Complete and running against the live FPL API.
 - [x] Performance tracking against the official gameweek average
 - [x] Frontend — half pitch, two tabs, gameweek history, player detail sheets
 - [x] Scheduled jobs and live updates
+- [x] One-command deployment that seeds and runs itself
 
 Every rule is verified against the live FPL API, which publishes the game's own
 settings — see [`docs/rules-sources.md`](docs/rules-sources.md) for the field
@@ -66,11 +67,18 @@ From an empty database to a working site:
 
 ```sh
 cd backend
-fplai refresh        # players, teams, prices, fixtures      (~2s)
+fplai seed           # everything, in the only order that works
+python -m fplai.api.app
+```
+
+`seed` is the four steps below run in sequence, and each is skipped if its work
+is already done, so an interrupted seed picks up where it stopped:
+
+```sh
+fplai refresh        # players, teams, prices, fixtures       (~2s)
 fplai history        # per-player price history, past seasons (~1-10 min)
 fplai backfill       # replay every gameweek so far           (~4s)
 fplai score          # score both models against the average
-python -m fplai.api.app
 ```
 
 ```sh
@@ -96,13 +104,34 @@ fplai live [--gameweek N]     # live points, then rescore
 fplai score [--gameweek N]    # rescore stored picks
 fplai finalise --gameweek N   # final points and the official average
 fplai status                  # what the database currently knows
+fplai seed                    # fill an empty database from scratch
+fplai schedule                # run the scheduler in the foreground
 ```
 
 `finalise` refuses to run before lockdown — 09:00 UK time on the day after the
 gameweek's last match — and exits non-zero, so it can be scheduled
 optimistically and will simply do nothing when it is early.
 
-### The three scheduled jobs
+### The scheduler
+
+In a deployment the jobs run inside the web process, on a timer, and there is
+nothing to schedule by hand. That is not a preference: a host attaches a
+persistent disk to exactly one service, and a platform cron job is a separate
+service with its own empty filesystem, so it could not see the database the
+jobs read and write.
+
+The scheduler holds no state between ticks. Every five minutes it asks the
+database what is owed and does that, so a restart, a redeploy or a week of
+downtime all resolve the same way -- whatever is unfinished is simply still
+due. A deadline that went by while the site was down is repaired by the
+backfill, which reconstructs the gameweek from the data that existed before it,
+rather than picked now with hindsight.
+
+`FPLAI_SCHEDULER=1` turns it on. It is on in the container image and off
+locally, so running the API on a laptop does not start calling the FPL API on a
+timer. To watch it work, `fplai schedule` runs the same loop in the foreground.
+
+### The three jobs it runs
 
 | When | Command | What it does |
 |---|---|---|
@@ -110,8 +139,9 @@ optimistically and will simply do nothing when it is early.
 | During the gameweek | `fplai live` | Poll live points; apply automatic substitutions as matches complete |
 | After lockdown | `fplai finalise --gameweek N` | Final points, the official gameweek average, season totals and new prices |
 
-A workable crontab, with the deadline job an hour early so a late team-news
-change is still picked up:
+Each is also a CLI command, so a host with its own scheduler can drive them
+from outside instead. A workable crontab, with the deadline job an hour early
+so a late team-news change is still picked up:
 
 ```cron
 # Refresh and lock picks before Saturday's deadline
@@ -136,6 +166,9 @@ Everything is an environment variable with a sensible default (see
 | `FPLAI_PLANNING_HORIZON` | `5` | Gameweeks the projections look ahead |
 | `FPLAI_HIT_MARGIN` | `2.0` | Points a transfer must clear *above* the 4-point hit |
 | `FPLAI_SHIRT_BASE_URL` | FPL shirt CDN | Club shirt images, keyed by team code |
+| `FPLAI_SCHEDULER` | `0` | Run the scheduled jobs in the web process |
+| `FPLAI_SCHEDULER_INTERVAL` | `300` | Seconds between scheduler ticks |
+| `FPLAI_FRONTEND_DIST` | `frontend/dist` | Built frontend to serve, if present |
 
 The API is public and unauthenticated, which is exactly why the client is
 careful with it: every response is cached on disk, requests are spaced by
@@ -261,6 +294,26 @@ Open `http://localhost:8000`. In development Vite serves the frontend itself
 and proxies `/api` to port 8000, so the frontend uses same-origin paths in both
 cases and nothing changes between them.
 
+### Render
+
+Render reads `render.yaml`, so the whole deployment is: **New → Blueprint →
+pick this repository → Apply**. Nothing needs running afterwards. The service
+comes up with an empty database, notices, and fills it in — reference data,
+then every player's price history, then a replay of the season so far — showing
+on the page which of those it is doing. It takes a few minutes, most of it the
+price history, which is one polite request per player.
+
+The blueprint asks for the `starter` instance type rather than the free one,
+which costs a few dollars a month. That is not padding: the free tier has no
+disk, and it sleeps when idle. A deployment without a disk loses the whole
+season on every restart, and a sleeping one misses deadlines — and a deadline
+missed is a gameweek the Manager sat out.
+
+After that it drives itself. It refreshes and locks both squads in the two
+hours before each deadline, polls live points through the matches, and takes
+the final scores and the official average after lockdown. Pushing to the
+default branch redeploys it; the disk, and therefore the season, survives.
+
 ### With Docker
 
 ```sh
@@ -272,26 +325,28 @@ The volume matters: the season's entire record is one SQLite file, and a
 container without it starts empty. Back up that file and everything travels
 with it.
 
-Seed a fresh deployment by running the jobs inside the container:
+The container seeds itself on first boot and runs the jobs on a timer, so there
+is nothing to run by hand. To do it explicitly instead — to watch it, or to
+seed a partial database — every job is a command:
 
 ```sh
-docker exec -it <container> python -m fplai.cli refresh
-docker exec -it <container> python -m fplai.cli history
-docker exec -it <container> python -m fplai.cli backfill
-docker exec -it <container> python -m fplai.cli score
+docker exec -it <container> fplai seed      # reference data, history, backfill, scores
+docker exec -it <container> fplai status    # what the database currently knows
 ```
 
-### Hosting it
+### Hosting it elsewhere
 
-Anything that runs a container with a persistent disk will do. The app is
-small — one process, a few hundred MB of RAM, and a database measured in
-megabytes — so the smallest tier of anything is enough. What it needs:
+Anything that runs a container with a persistent disk will do. The app is one
+small process with a database measured in megabytes, so the smallest tier of
+anything is enough. What it needs:
 
 - **A persistent volume** mounted at `/data`. Without one, every restart wipes
-  the season.
-- **A scheduler** for the three jobs. Either the crontab above on the host, or
-  the platform's own scheduled-task feature running the same `fplai` commands
-  against the same volume.
+  the season. This is the one that bites: everything else is recoverable.
 - **Outbound HTTPS** to `fantasy.premierleague.com`.
+- **One instance**, not several. A second would be a second writer to the same
+  SQLite file.
 
-`PORT` is read from the environment, which is what most platforms set.
+`PORT` is read from the environment, which is what most platforms set, and
+`FPLAI_SCHEDULER=1` — already set in the image — is what makes the process run
+the jobs as well as serve the site. A host that would rather drive the jobs
+itself can set it to `0` and run the CLI commands above on its own schedule.

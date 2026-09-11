@@ -1,0 +1,51 @@
+# Deploying this to Render: New > Blueprint, point it at this repository, and
+# it reads this file. Nothing else needs configuring, and nothing needs running
+# by hand afterwards -- the service fills its own database on first boot and
+# keeps itself up to date from then on.
+
+services:
+  - type: web
+    name: fpl-ai-manager
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+
+    # Frankfurt is the closest region to the Premier League's own timezone,
+    # which is where every deadline in this app is reckoned. Any region works.
+    region: frankfurt
+
+    # A paid instance type, because the free one has no disk and sleeps when
+    # idle. Both matter here: the season's record is a file on that disk, and a
+    # sleeping service misses deadlines. This is the smallest tier that has one.
+    plan: starter
+
+    # One, always. The database is a single SQLite file, so a second instance
+    # would be a second writer to the same disk. Render will not do it with a
+    # disk attached anyway -- this says so out loud.
+    numInstances: 1
+
+    healthCheckPath: /api/health
+
+    disk:
+      name: fplai-data
+      mountPath: /data
+      # The whole season -- players, prices, projections, picks and scores --
+      # is a few tens of megabytes. One gigabyte is Render's minimum and is
+      # more than this will ever need.
+      sizeGB: 1
+
+    envVars:
+      # The jobs run inside the web process. A Render cron job is a separate
+      # service with its own filesystem, so it could not see this disk.
+      - key: FPLAI_SCHEDULER
+        value: "1"
+
+      # How often the scheduler looks for work. Five minutes is well inside the
+      # two-hour window it has to lock a squad before a deadline.
+      - key: FPLAI_SCHEDULER_INTERVAL
+        value: "300"
+
+      # Points a transfer has to clear above the four-point hit before the
+      # Manager takes it. Raise it to make the Manager more patient.
+      - key: FPLAI_HIT_MARGIN
+        value: "2.0"
