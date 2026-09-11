@@ -85,7 +85,9 @@ def setup_progress(
         "ready": stage == "ready",
         "stage": stage,
         "message": labels[stage],
-        "step": names.index(stage) + 1,
+        # Clamped so a finished setup reads as the last step rather than
+        # one past it.
+        "step": min(names.index(stage) + 1, len(names) - 1),
         "steps": len(names) - 1,
         **_counts(connection),
     }

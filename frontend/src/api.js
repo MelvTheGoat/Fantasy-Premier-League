@@ -24,3 +24,5 @@ export const money = (tenths) =>
 
 export const signed = (value) =>
   value == null ? '—' : `${value > 0 ? '+' : ''}${value}`
+
+export const fetchSetup = () => json('/api/setup')

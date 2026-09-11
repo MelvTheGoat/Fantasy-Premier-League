@@ -609,3 +609,62 @@ body {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* --- first run -------------------------------------------------------- */
+
+.setup-stages {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.setup-stages li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--text-faint);
+}
+
+.setup-mark {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1.5px currentColor;
+  flex: none;
+}
+
+.setup-stages li.done { color: var(--text-dim); }
+.setup-stages li.done .setup-mark {
+  background: currentColor;
+  box-shadow: none;
+}
+
+.setup-stages li.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* The stage under way pulses, so a page that sits on one step for minutes
+   still reads as working rather than stuck. */
+.setup-stages li.active .setup-mark {
+  background: currentColor;
+  box-shadow: none;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% { opacity: 0.25; }
+}
+
+.setup code {
+  font-size: 12.5px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-raised);
+}
+
+.setup-stages + .note { margin-top: 16px; }
