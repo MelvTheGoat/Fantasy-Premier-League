@@ -110,6 +110,8 @@ def optimise_squad(
     prices: dict[int, int] | None = None,
     excluded: set[int] | None = None,
     required: set[int] | None = None,
+    owned: set[int] | None = None,
+    max_transfers: int | None = None,
     bench_weight: float = BENCH_WEIGHT,
     captain_multiplier: int = 2,
 ) -> SquadSelection:
@@ -118,6 +120,13 @@ def optimise_squad(
     `points` is projected points per player for the gameweek being picked.
     `prices` overrides the roster's prices, which is how the Manager prices a
     transfer at selling price rather than market price.
+
+    `owned` and `max_transfers` together cap how far the answer may move from a
+    squad already held. Without them the optimiser returns the unconstrained
+    best squad, which is right for Best XI and useless for the Manager -- it
+    would rebuild from scratch every week. With them, the Manager can ask "what
+    is the best squad reachable in one transfer" and compare that against two,
+    three, or none.
 
     Raises `InfeasibleSquad` when the constraints cannot all be met -- most
     often because the budget is too small for the players still required.
@@ -162,6 +171,12 @@ def optimise_squad(
         if e not in in_squad:
             raise InfeasibleSquad(f"required player {e} is not available to pick")
         problem += in_squad[e] == 1
+
+    if max_transfers is not None:
+        if owned is None:
+            raise ValueError("max_transfers needs `owned` to count transfers against")
+        incoming = [e for e in candidates if e not in owned]
+        problem += pulp.lpSum(in_squad[e] for e in incoming) <= max_transfers
 
     # Starters count fully, bench players at a fraction, and the captain's
     # projection is counted an extra time for the doubling.
