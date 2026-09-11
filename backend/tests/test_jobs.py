@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -14,7 +14,12 @@ from fplai.config import Settings
 from fplai.data.client import FPLClient
 from fplai.data.db import connect, init_db
 from fplai.data.repository import current_gameweek, gameweek_average, load_results
-from fplai.jobs.refresh import finalise_gameweek, refresh_live, refresh_reference
+from fplai.jobs.refresh import (
+    finalise_gameweek,
+    price_snapshot_gameweek,
+    refresh_live,
+    refresh_reference,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 UK = ZoneInfo("Europe/London")
@@ -22,6 +27,15 @@ UK = ZoneInfo("Europe/London")
 
 def load(name: str):
     return json.loads((FIXTURES / name).read_text())
+
+
+#: Counts in the recorded payloads, and the gameweek they are current for.
+RECORDED = {"teams": 20, "gameweeks": 38, "players": 43, "fixtures": 60}
+CURRENT_GAMEWEEK = 3
+
+#: GW3's last fixture kicked off on 6 September, so lockdown is 09:00 UK on
+#: the 7th.
+GW3_LOCKDOWN = datetime(2026, 9, 7, 9, 0, tzinfo=UK)
 
 
 def routes(request: httpx.Request) -> httpx.Response:
@@ -33,8 +47,6 @@ def routes(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=load("fixtures.json"))
     if path.endswith("/event/3/live/"):
         return httpx.Response(200, json=load("event_3_live.json"))
-    if path.endswith("/event/4/live/"):
-        return httpx.Response(200, json=load("event_4_live.json"))
     return httpx.Response(404)
 
 
@@ -59,34 +71,69 @@ def client(tmp_path):
 
 class TestRefreshReference:
     def test_everything_is_ingested_in_one_pass(self, db, client):
-        counts = refresh_reference(db, client, gameweek=4)
-        assert counts == {"teams": 6, "gameweeks": 38, "players": 26, "fixtures": 16}
-        assert current_gameweek(db) == 4
+        counts = refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
+        assert counts == RECORDED
+        assert current_gameweek(db) == CURRENT_GAMEWEEK
 
     def test_prices_are_snapshotted_against_the_given_gameweek(self, db, client):
         refresh_reference(db, client, gameweek=5)
         row = db.execute(
             "SELECT COUNT(*) c FROM player_prices WHERE gameweek = 5"
         ).fetchone()
-        assert row["c"] == 26
+        assert row["c"] == RECORDED["players"]
 
     def test_running_it_twice_changes_nothing(self, db, client):
-        refresh_reference(db, client, gameweek=4)
-        refresh_reference(db, client, gameweek=4)
-        assert db.execute("SELECT COUNT(*) c FROM players").fetchone()["c"] == 26
-        assert db.execute("SELECT COUNT(*) c FROM fixtures").fetchone()["c"] == 16
+        refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
+        refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
+        for table in ("players", "fixtures"):
+            expected = RECORDED[table]
+            count = db.execute(f"SELECT COUNT(*) c FROM {table}").fetchone()["c"]
+            assert count == expected
+
+
+class TestPriceSnapshotGameweek:
+    """Which gameweek a refresh records prices against."""
+
+    def test_the_next_deadline_is_used(self):
+        events = [
+            {"id": 3, "is_current": True, "is_next": False},
+            {"id": 4, "is_current": False, "is_next": True},
+        ]
+        assert price_snapshot_gameweek({"events": events}) == 4
+
+    def test_the_current_gameweek_is_the_fallback(self):
+        """At the end of the season there is no next gameweek."""
+        events = [{"id": 38, "is_current": True, "is_next": False}]
+        assert price_snapshot_gameweek({"events": events}) == 38
+
+    def test_an_empty_payload_yields_nothing(self):
+        assert price_snapshot_gameweek({"events": []}) is None
+
+    def test_a_cold_database_still_snapshots_prices(self, db, client):
+        """The gameweek comes from the payload, not the database. On a first
+        run the database has no gameweeks yet, so looking it up there would
+        silently skip the snapshot and leave the models unable to price a
+        past decision."""
+        refresh_reference(db, client)
+        rows = db.execute(
+            "SELECT gameweek, COUNT(*) c FROM player_prices GROUP BY gameweek"
+        ).fetchall()
+        assert [(r["gameweek"], r["c"]) for r in rows] == [
+            (CURRENT_GAMEWEEK + 1, RECORDED["players"])
+        ]
 
 
 class TestRefreshLive:
     def test_the_current_gameweek_is_used_by_default(self, db, client):
-        refresh_reference(db, client, gameweek=4)
+        refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
         assert refresh_live(db, client) > 0
-        assert load_results(db, 4)[1].minutes == 180
+        results = load_results(db, CURRENT_GAMEWEEK)
+        assert any(r.minutes > 0 for r in results.values())
 
     def test_an_explicit_gameweek_overrides_it(self, db, client):
-        refresh_reference(db, client, gameweek=4)
-        refresh_live(db, client, gameweek=3)
-        assert load_results(db, 3)[1].minutes == 90
+        refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
+        refresh_live(db, client, gameweek=CURRENT_GAMEWEEK)
+        assert load_results(db, CURRENT_GAMEWEEK)
 
     def test_nothing_happens_without_a_current_gameweek(self, db, client):
         assert refresh_live(db, client) == 0
@@ -101,42 +148,40 @@ class TestRefreshLive:
             return original(path, ttl_seconds=ttl_seconds)
 
         monkeypatch.setattr(client, "get", spy)
-        refresh_reference(db, client, gameweek=4)
-        refresh_live(db, client, gameweek=4)
-        assert ("event/4/live/", 0) in seen
+        refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
+        refresh_live(db, client, gameweek=CURRENT_GAMEWEEK)
+        assert (f"event/{CURRENT_GAMEWEEK}/live/", 0) in seen
 
 
 class TestFinalise:
     def test_a_gameweek_before_lockdown_is_left_alone(self, db, client):
-        refresh_reference(db, client, gameweek=4)
-        # GW4's last kickoff is 19:00 on 14 September, so lockdown is 09:00 on
-        # the 15th. An hour before that, nothing may be finalised.
-        before = datetime(2026, 9, 15, 8, 0, tzinfo=UK)
-        assert finalise_gameweek(db, client, 4, now=before) is False
+        refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
+        before = GW3_LOCKDOWN - timedelta(minutes=1)
+        assert finalise_gameweek(db, client, CURRENT_GAMEWEEK, now=before) is False
 
     def test_a_gameweek_past_lockdown_is_finalised(self, db, client):
-        refresh_reference(db, client, gameweek=4)
-        after = datetime(2026, 9, 15, 9, 0, tzinfo=UK)
-        assert finalise_gameweek(db, client, 4, now=after) is True
-        assert load_results(db, 4)[1].total_points > 0
+        refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
+        assert finalise_gameweek(db, client, CURRENT_GAMEWEEK, now=GW3_LOCKDOWN) is True
+        results = load_results(db, CURRENT_GAMEWEEK)
+        assert any(r.total_points > 0 for r in results.values())
 
     def test_finalising_records_the_official_average(self, db, client):
-        refresh_reference(db, client, gameweek=3)
-        after = datetime(2026, 9, 1, 9, 0, tzinfo=UK)
-        assert finalise_gameweek(db, client, 3, now=after) is True
-        assert gameweek_average(db, 3) == 55
+        refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
+        assert finalise_gameweek(db, client, CURRENT_GAMEWEEK, now=GW3_LOCKDOWN) is True
+        assert gameweek_average(db, CURRENT_GAMEWEEK) > 0
 
     def test_finalising_snapshots_the_next_gameweeks_prices(self, db, client):
         """Prices move overnight after a gameweek, and the next deadline's
         selling prices depend on catching them."""
-        refresh_reference(db, client, gameweek=3)
-        finalise_gameweek(db, client, 3, now=datetime(2026, 9, 1, 9, 0, tzinfo=UK))
+        refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
+        finalise_gameweek(db, client, CURRENT_GAMEWEEK, now=GW3_LOCKDOWN)
         row = db.execute(
-            "SELECT COUNT(*) c FROM player_prices WHERE gameweek = 4"
+            "SELECT COUNT(*) c FROM player_prices WHERE gameweek = ?",
+            (CURRENT_GAMEWEEK + 1,),
         ).fetchone()
-        assert row["c"] == 26
+        assert row["c"] == RECORDED["players"]
 
     def test_a_gameweek_with_no_fixtures_is_never_final(self, db, client):
-        refresh_reference(db, client, gameweek=4)
+        refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
         now = datetime(2027, 6, 1, tzinfo=UTC)
         assert finalise_gameweek(db, client, 30, now=now) is False

@@ -72,8 +72,10 @@ def _dispatch(args, connection) -> int:
 
     with FPLClient() as client:
         if args.command == "refresh":
-            gameweek = args.gameweek or next_gameweek(connection) or current_gameweek(connection)
-            counts = refresh_reference(connection, client, gameweek=gameweek)
+            # Left unset, the job reads the target gameweek from the payload,
+            # which is the only thing that works on a cold database.
+            counts = refresh_reference(connection, client, gameweek=args.gameweek)
+            gameweek = args.gameweek or next_gameweek(connection)
             print(f"refreshed for GW{gameweek}: " + ", ".join(
                 f"{k}={v}" for k, v in counts.items()
             ))

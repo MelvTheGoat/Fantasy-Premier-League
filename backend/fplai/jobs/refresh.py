@@ -32,6 +32,22 @@ logger = logging.getLogger(__name__)
 LIVE_CACHE_TTL = 0
 
 
+def price_snapshot_gameweek(bootstrap: dict) -> int | None:
+    """The gameweek prices should be recorded against: the next deadline.
+
+    Read from the payload rather than the database, because on a cold database
+    there is no gameweek to look up yet -- the first refresh is what puts one
+    there. Falls back to the current gameweek at the end of the season, when
+    there is no next one.
+    """
+    events = bootstrap.get("events") or []
+    for flag in ("is_next", "is_current"):
+        match = next((e["id"] for e in events if e.get(flag)), None)
+        if match is not None:
+            return match
+    return None
+
+
 def refresh_reference(
     connection: sqlite3.Connection,
     client: FPLClient,
@@ -40,11 +56,16 @@ def refresh_reference(
 ) -> dict[str, int]:
     """Refresh players, teams, gameweeks and fixtures.
 
-    `gameweek` is the week whose prices are being snapshotted -- normally the
-    one whose deadline is next, since that is the price the models will pay.
+    `gameweek` is the week whose prices are being snapshotted. Left unset it is
+    taken from the payload's own `is_next` event, which is the deadline the
+    models are about to buy against.
     """
     bootstrap = client.bootstrap_static()
     fixtures = client.fixtures()
+
+    if gameweek is None:
+        gameweek = price_snapshot_gameweek(bootstrap)
+        logger.info("snapshotting prices against GW%s", gameweek)
 
     counts = {
         "teams": ingest_teams(connection, bootstrap),
@@ -110,4 +131,10 @@ def finalise_gameweek(
     return True
 
 
-__all__ = ["LIVE_CACHE_TTL", "finalise_gameweek", "refresh_live", "refresh_reference"]
+__all__ = [
+    "LIVE_CACHE_TTL",
+    "finalise_gameweek",
+    "price_snapshot_gameweek",
+    "refresh_live",
+    "refresh_reference",
+]
