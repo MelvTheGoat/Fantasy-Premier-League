@@ -57,11 +57,11 @@ class Settings:
     final_gameweek: int = _env_int("FPLAI_FINAL_GAMEWEEK", 38)
 
     #: Base for club shirt images. The team *code* (not the team id) and the
-    #: goalkeeper variant are substituted in by `fplai.data.assets`.
-    #: UNVERIFIED -- the CDN was unreachable from the build environment, so
-    #: confirm the pattern before relying on it. See docs/rules-sources.md.
+    #: goalkeeper `_1` variant are substituted in by `fplai.data.assets`.
+    #: Confirmed against the live CDN.
     shirt_base_url: str = os.environ.get(
-        "FPLAI_SHIRT_BASE_URL", "https://resources.premierleague.com/premierleague/photos/players"
+        "FPLAI_SHIRT_BASE_URL",
+        "https://fantasy.premierleague.com/dist/img/shirts/standard",
     )
 
     def ensure_directories(self) -> None:
