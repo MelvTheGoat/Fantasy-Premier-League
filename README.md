@@ -14,19 +14,20 @@ management costs against perfect freedom.
 
 ## Status
 
-Built so far, with tests:
+Complete and running against the live FPL API.
 
-- [x] **Data ingestion** — FPL API client, SQLite schema, ingestion with blank
-      and double gameweek detection
-- [x] **Rules engine** — squad validity, formations, automatic substitutions,
-      captaincy, selling prices, transfer costs and chip constraints
-- [ ] Expected-points (xPts) model
-- [ ] Best XI optimiser
-- [ ] The Manager: transfers, hits, chips and explanations
-- [ ] Backfill from GW1 with no leakage
-- [ ] Performance tracking
-- [ ] Frontend
-- [ ] Scheduled jobs and live updates
+- [x] Data ingestion — cached, rate-limited API client, SQLite schema, blank and
+      double gameweek detection
+- [x] Rules engine — squad validity, formations, automatic substitutions,
+      captaincy, selling prices, transfer costs, chip constraints
+- [x] Expected-points model — minutes, attacking returns, clean sheets, DefCon,
+      bonus, over a multi-gameweek horizon
+- [x] Best XI optimiser
+- [x] The Manager — transfers, hits, chips, and an explanation for each
+- [x] Backfill from GW1 with no leakage
+- [x] Performance tracking against the official gameweek average
+- [x] Frontend — half pitch, two tabs, gameweek history, player detail sheets
+- [x] Scheduled jobs and live updates
 
 Every rule is verified against the live FPL API, which publishes the game's own
 settings — see [`docs/rules-sources.md`](docs/rules-sources.md) for the field
@@ -59,17 +60,41 @@ python tests/fixtures/build_synthetic_fixtures.py  # blank/double gameweeks
 Blank and double gameweeks are constructed rather than recorded, because the
 published fixture list has none yet this season.
 
+## Getting started
+
+From an empty database to a working site:
+
+```sh
+cd backend
+fplai refresh        # players, teams, prices, fixtures      (~2s)
+fplai history        # per-player price history, past seasons (~1-10 min)
+fplai backfill       # replay every gameweek so far           (~4s)
+fplai score          # score both models against the average
+python -m fplai.api.app
+```
+
+```sh
+cd frontend
+npm install && npm run dev     # http://localhost:5173
+```
+
+`fplai history` is the slow one: it is a request per player, paced so the FPL
+API is not hammered. It only needs running once, because a past gameweek's
+prices never change.
+
 ## Running the jobs by hand
 
 Every scheduled job is also a CLI command:
 
 ```sh
 fplai init-db                 # create the schema
-fplai refresh                 # players, teams, prices, fixtures
-fplai refresh --gameweek 6    # snapshot prices against a specific gameweek
-fplai live                    # live points for the current gameweek
-fplai live --gameweek 5
-fplai finalise --gameweek 5   # final points and the official average, after lockdown
+fplai refresh [--gameweek N]  # players, teams, prices, fixtures
+fplai history [--limit N]     # per-player price history and past seasons
+fplai backfill [--through N]  # replay past gameweeks and lock both models
+fplai pick --gameweek N       # project and lock one gameweek, before its deadline
+fplai live [--gameweek N]     # live points, then rescore
+fplai score [--gameweek N]    # rescore stored picks
+fplai finalise --gameweek N   # final points and the official average
 fplai status                  # what the database currently knows
 ```
 
@@ -81,9 +106,21 @@ optimistically and will simply do nothing when it is early.
 
 | When | Command | What it does |
 |---|---|---|
-| Before each deadline | `fplai refresh --gameweek N` | Refresh data, snapshot prices, then generate projections and lock both models' picks |
+| Before each deadline | `fplai refresh && fplai pick --gameweek N` | Refresh data, snapshot prices, project, and lock both models' picks |
 | During the gameweek | `fplai live` | Poll live points; apply automatic substitutions as matches complete |
 | After lockdown | `fplai finalise --gameweek N` | Final points, the official gameweek average, season totals and new prices |
+
+A workable crontab, with the deadline job an hour early so a late team-news
+change is still picked up:
+
+```cron
+# Refresh and lock picks before Saturday's deadline
+0 12 * * SAT  cd /srv/fplai/backend && fplai refresh && fplai pick --gameweek $(fplai status | awk '/next/{print $2}' | tr -d GW)
+# Poll live scores through match days
+*/10 12-23 * * SAT,SUN  cd /srv/fplai/backend && fplai live
+# Finalise after lockdown; exits non-zero and does nothing if it is early
+30 9 * * *    cd /srv/fplai/backend && fplai finalise --gameweek N
+```
 
 ## Configuration
 
@@ -123,6 +160,32 @@ overwriting. Regenerating a past gameweek with hindsight would quietly
 invalidate every result after it, so it is refused outright rather than left to
 a convention.
 
+## How the models decide
+
+Both pick from the same projection, so the only difference between them is
+what they are allowed to do with it.
+
+**The expected-points model** is built from components rather than fitted end
+to end — three gameweeks into a new season is nowhere near enough data to fit
+something that would beat a well-specified model, and components are what let
+the frontend explain a pick in terms a person recognises. Each player's rates
+are shrunk toward a prior scaled by their price, which is FPL's own estimate of
+their output, so a midfielder with one goal from 180 minutes is not projected
+as the best player in the game. Team strength is derived from fixture
+difficulty and actual results, blended by how much has been played, because
+FPL stopped publishing attack and defence ratings this season.
+
+**Best XI** runs the optimiser on one gameweek and stops.
+
+**The Manager** asks the optimiser for the best squad reachable in 0, 1, 2 and
+3 transfers, then takes whichever leaves the most points after hits. A hit has
+to clear four points *plus* a margin for the projection being wrong, which it
+routinely is. Rolling a transfer is a real answer and often the right one.
+Chips each have their own bar rather than a shared one: tripling a captain is
+worth the captain's score, and a premium captain projects six to eight points
+in an ordinary week, so a shared threshold would fire Triple Captain in week
+one and waste it.
+
 ## Layout
 
 ```
@@ -130,21 +193,38 @@ backend/
   fplai/
     rules/          the rules engine -- pure logic, no I/O
       constants.py    every FPL rule as a named constant
+      scoring_table.py  what each action scores, read from the API
       squad.py        squad validity and formations
       autosubs.py     automatic substitutions
       captaincy.py    the armband, including Triple Captain
       pricing.py      selling prices
       transfers.py    free transfers, hits, applying transfers
-      chips.py        the two chip sets and their expiry
+      chips.py        the two chip sets, their windows and expiry
       scoring.py      assembling a gameweek score from real points
+    model/          expected points
+      team_strength.py  attack and defence, derived not published
+      player_rates.py   minutes, returns and DefCon, with shrinkage
+      xpts.py           points per fixture, split by source
+      projections.py    the pipeline, and the no-leakage rule
+    optimise/squad.py   ILP squad and lineup selection
+    strategy/
+      best_xi.py      Model B: best squad from scratch each week
+      manager.py      Model A: one squad, transfers, hits, chips
+      explain.py      the reasons behind every pick and transfer
     data/
       client.py       cached, rate-limited FPL API client
       ingest.py       API payloads -> database rows
       repository.py   database rows -> rules types
+      assets.py       club shirt image URLs
       schema.sql      the schema, with the reasoning in comments
-    jobs/refresh.py   the three scheduled jobs
-    cli.py            run any job by hand
-  tests/            one test module per rule, plus integration tests
+    jobs/           refresh, backfill, live, score
+    api/            the read-only HTTP API
+    cli.py          run any job by hand
+  tests/            one module per area, ~490 tests
+frontend/
+  src/
+    App.jsx           tabs, gameweek selector, live polling
+    components/       pitch, player, score card, transfers, season, sheet
 docs/
   rules-sources.md  where each rule came from, and what is unverified
 ```
@@ -152,9 +232,35 @@ docs/
 The rules engine has no imports from `data`, and the data layer has no rule
 logic. That separation is what lets every rule be tested without a database.
 
+## API
+
+Read-only, and small on purpose: the models run as scheduled jobs and this
+serves what they already decided, so a slow request can never delay a deadline.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/gameweeks` | Every gameweek, and which one to open on |
+| `GET /api/{model}/gameweek/{gw}` | Squad, points, auto-subs, transfers, explanations |
+| `GET /api/{model}/season` | Totals, beat-the-average tally, cumulative series |
+| `GET /api/{model}/gameweek/{gw}/player/{id}` | The player detail sheet |
+| `GET /api/summary` | Both models side by side |
+
+`{model}` is `manager` or `best_xi`.
+
 ## Deployment
 
-Not yet wired up. The backend is a FastAPI app and a SQLite file, so it runs on
-anything that can hold a disk; the three jobs above want a scheduler (cron,
-systemd timers, or a hosted equivalent). This section will be filled in once
-the API and frontend exist.
+The backend is a FastAPI app over a SQLite file, so it runs on anything with a
+disk. The frontend builds to static files.
+
+```sh
+cd frontend && npm run build        # -> frontend/dist
+cd backend && python -m fplai.api.app
+```
+
+Serve `frontend/dist` from any static host and point `/api` at the backend. In
+development Vite proxies `/api` to `http://127.0.0.1:8000`, so the frontend uses
+same-origin paths in both cases and nothing changes between them.
+
+The three jobs need a scheduler — cron, systemd timers, or a hosted equivalent.
+See the crontab above. The database is a single file; back it up and the whole
+season's record travels with it.
