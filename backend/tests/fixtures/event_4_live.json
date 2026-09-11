@@ -1,0 +1,218 @@
+{
+  "elements": [
+    {
+      "id": 1,
+      "stats": {
+        "minutes": 180,
+        "goals_scored": 0,
+        "assists": 0,
+        "clean_sheets": 1,
+        "goals_conceded": 0,
+        "own_goals": 0,
+        "penalties_saved": 0,
+        "penalties_missed": 0,
+        "yellow_cards": 0,
+        "red_cards": 0,
+        "saves": 7,
+        "bonus": 0,
+        "bps": 55,
+        "starts": 2,
+        "total_points": 11,
+        "clearances_blocks_interceptions": 0,
+        "tackles": 0,
+        "recoveries": 0,
+        "defensive_contribution": 0,
+        "expected_goals": "0.00",
+        "expected_assists": "0.00",
+        "expected_goal_involvements": "0.00",
+        "expected_goals_conceded": "0.00"
+      },
+      "explain": [
+        {
+          "fixture": 10,
+          "stats": [
+            {
+              "identifier": "minutes",
+              "points": 2,
+              "value": 90
+            },
+            {
+              "identifier": "clean_sheets",
+              "points": 4,
+              "value": 1
+            },
+            {
+              "identifier": "saves",
+              "points": 1,
+              "value": 3
+            }
+          ]
+        },
+        {
+          "fixture": 11,
+          "stats": [
+            {
+              "identifier": "minutes",
+              "points": 2,
+              "value": 90
+            },
+            {
+              "identifier": "saves",
+              "points": 1,
+              "value": 4
+            },
+            {
+              "identifier": "goals_conceded",
+              "points": -1,
+              "value": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "stats": {
+        "minutes": 155,
+        "goals_scored": 2,
+        "assists": 1,
+        "clean_sheets": 0,
+        "goals_conceded": 0,
+        "own_goals": 0,
+        "penalties_saved": 0,
+        "penalties_missed": 0,
+        "yellow_cards": 0,
+        "red_cards": 0,
+        "saves": 0,
+        "bonus": 0,
+        "bps": 61,
+        "starts": 2,
+        "total_points": 17,
+        "clearances_blocks_interceptions": 0,
+        "tackles": 0,
+        "recoveries": 0,
+        "defensive_contribution": 0,
+        "expected_goals": "1.42",
+        "expected_assists": "0.00",
+        "expected_goal_involvements": "0.00",
+        "expected_goals_conceded": "0.00"
+      },
+      "explain": [
+        {
+          "fixture": 10,
+          "stats": [
+            {
+              "identifier": "minutes",
+              "points": 2,
+              "value": 90
+            },
+            {
+              "identifier": "goals_scored",
+              "points": 4,
+              "value": 1
+            },
+            {
+              "identifier": "assists",
+              "points": 3,
+              "value": 1
+            }
+          ]
+        },
+        {
+          "fixture": 11,
+          "stats": [
+            {
+              "identifier": "minutes",
+              "points": 2,
+              "value": 65
+            },
+            {
+              "identifier": "goals_scored",
+              "points": 4,
+              "value": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "stats": {
+        "minutes": 62,
+        "goals_scored": 0,
+        "assists": 0,
+        "clean_sheets": 0,
+        "goals_conceded": 0,
+        "own_goals": 0,
+        "penalties_saved": 0,
+        "penalties_missed": 0,
+        "yellow_cards": 0,
+        "red_cards": 0,
+        "saves": 0,
+        "bonus": 0,
+        "bps": 0,
+        "starts": 1,
+        "total_points": 2,
+        "clearances_blocks_interceptions": 0,
+        "tackles": 0,
+        "recoveries": 0,
+        "defensive_contribution": 0,
+        "expected_goals": "0.00",
+        "expected_assists": "0.00",
+        "expected_goal_involvements": "0.00",
+        "expected_goals_conceded": "0.00"
+      },
+      "explain": [
+        {
+          "fixture": 10,
+          "stats": [
+            {
+              "identifier": "minutes",
+              "points": 0,
+              "value": 0
+            }
+          ]
+        },
+        {
+          "fixture": 11,
+          "stats": [
+            {
+              "identifier": "minutes",
+              "points": 2,
+              "value": 62
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "stats": {
+        "minutes": 0,
+        "goals_scored": 0,
+        "assists": 0,
+        "clean_sheets": 0,
+        "goals_conceded": 0,
+        "own_goals": 0,
+        "penalties_saved": 0,
+        "penalties_missed": 0,
+        "yellow_cards": 0,
+        "red_cards": 0,
+        "saves": 0,
+        "bonus": 0,
+        "bps": 0,
+        "starts": 0,
+        "total_points": 0,
+        "clearances_blocks_interceptions": 0,
+        "tackles": 0,
+        "recoveries": 0,
+        "defensive_contribution": 0,
+        "expected_goals": "0.00",
+        "expected_assists": "0.00",
+        "expected_goal_involvements": "0.00",
+        "expected_goals_conceded": "0.00"
+      },
+      "explain": []
+    }
+  ]
+}
