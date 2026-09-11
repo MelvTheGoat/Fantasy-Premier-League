@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS players (
     news            TEXT,
     news_added      TEXT,
     selected_by_percent REAL,
+    -- Set-piece duties. 1 means first-choice taker; NULL means not on them.
+    -- These drive both the penalty term in the projection and the role line
+    -- in a player's "why this player" explanation.
+    penalties_order INTEGER,
+    direct_freekicks_order INTEGER,
+    corners_order   INTEGER,
     updated_at      TEXT NOT NULL
 );
 
@@ -141,6 +147,28 @@ CREATE TABLE IF NOT EXISTS player_gameweek_stats (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pgs_gameweek ON player_gameweek_stats(gameweek);
+
+-- Past-season totals from `element-summary/{id}/history_past`. Used as a prior
+-- for players with little or no record this season -- an established striker
+-- should not be shrunk toward the same goal rate as a debutant.
+CREATE TABLE IF NOT EXISTS player_season_history (
+    player_id       INTEGER NOT NULL REFERENCES players(id),
+    season_name     TEXT    NOT NULL,
+    minutes         INTEGER NOT NULL DEFAULT 0,
+    total_points    INTEGER NOT NULL DEFAULT 0,
+    goals_scored    INTEGER NOT NULL DEFAULT 0,
+    assists         INTEGER NOT NULL DEFAULT 0,
+    clean_sheets    INTEGER NOT NULL DEFAULT 0,
+    goals_conceded  INTEGER NOT NULL DEFAULT 0,
+    saves           INTEGER NOT NULL DEFAULT 0,
+    bonus           INTEGER NOT NULL DEFAULT 0,
+    bps             INTEGER NOT NULL DEFAULT 0,
+    yellow_cards    INTEGER NOT NULL DEFAULT 0,
+    start_cost      INTEGER,
+    end_cost        INTEGER,
+    updated_at      TEXT    NOT NULL,
+    PRIMARY KEY (player_id, season_name)
+);
 
 -- --- Projections ----------------------------------------------------------
 

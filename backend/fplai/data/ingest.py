@@ -118,6 +118,9 @@ def ingest_players(
                 element.get("news"),
                 element.get("news_added"),
                 _as_float(element.get("selected_by_percent")),
+                element.get("penalties_order"),
+                element.get("direct_freekicks_order"),
+                element.get("corners_and_indirect_freekicks_order"),
                 now,
             )
         )
@@ -128,8 +131,9 @@ def ingest_players(
         connection.executemany(
             "INSERT INTO players (id, code, web_name, first_name, second_name, team_id,"
             " element_type, now_cost, status, chance_of_playing_next_round,"
-            " chance_of_playing_this_round, news, news_added, selected_by_percent, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " chance_of_playing_this_round, news, news_added, selected_by_percent,"
+            " penalties_order, direct_freekicks_order, corners_order, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(id) DO UPDATE SET"
             " code=excluded.code, web_name=excluded.web_name, first_name=excluded.first_name,"
             " second_name=excluded.second_name, team_id=excluded.team_id,"
@@ -139,6 +143,9 @@ def ingest_players(
             " chance_of_playing_this_round=excluded.chance_of_playing_this_round,"
             " news=excluded.news, news_added=excluded.news_added,"
             " selected_by_percent=excluded.selected_by_percent,"
+            " penalties_order=excluded.penalties_order,"
+            " direct_freekicks_order=excluded.direct_freekicks_order,"
+            " corners_order=excluded.corners_order,"
             " updated_at=excluded.updated_at",
             rows,
         )
@@ -406,6 +413,80 @@ def _as_float(value: Any) -> float:
         return 0.0
 
 
+# --- element summary ---
+
+
+def ingest_element_summary(
+    connection: sqlite3.Connection,
+    element: int,
+    summary: dict,
+) -> dict[str, int]:
+    """Store one player's gameweek price history and past-season totals.
+
+    The price history is the reason this endpoint is worth 600-odd requests:
+    `history[].value` is the player's price *at that gameweek*, which is the
+    only way to reconstruct what a past decision would have cost. Without it a
+    backfill has to price GW1 at today's prices, which is a leak.
+    """
+    now = utcnow()
+
+    price_rows = [
+        (element, row["round"], row["value"], now)
+        for row in summary.get("history") or []
+        if row.get("round") is not None and row.get("value") is not None
+    ]
+
+    season_rows = [
+        (
+            element,
+            season.get("season_name"),
+            season.get("minutes", 0),
+            season.get("total_points", 0),
+            season.get("goals_scored", 0),
+            season.get("assists", 0),
+            season.get("clean_sheets", 0),
+            season.get("goals_conceded", 0),
+            season.get("saves", 0),
+            season.get("bonus", 0),
+            season.get("bps", 0),
+            season.get("yellow_cards", 0),
+            season.get("start_cost"),
+            season.get("end_cost"),
+            now,
+        )
+        for season in summary.get("history_past") or []
+        if season.get("season_name")
+    ]
+
+    with transaction(connection):
+        if price_rows:
+            connection.executemany(
+                "INSERT INTO player_prices (player_id, gameweek, now_cost, captured_at)"
+                " VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(player_id, gameweek) DO UPDATE SET"
+                " now_cost=excluded.now_cost, captured_at=excluded.captured_at",
+                price_rows,
+            )
+        if season_rows:
+            connection.executemany(
+                "INSERT INTO player_season_history (player_id, season_name, minutes,"
+                " total_points, goals_scored, assists, clean_sheets, goals_conceded,"
+                " saves, bonus, bps, yellow_cards, start_cost, end_cost, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(player_id, season_name) DO UPDATE SET"
+                " minutes=excluded.minutes, total_points=excluded.total_points,"
+                " goals_scored=excluded.goals_scored, assists=excluded.assists,"
+                " clean_sheets=excluded.clean_sheets,"
+                " goals_conceded=excluded.goals_conceded, saves=excluded.saves,"
+                " bonus=excluded.bonus, bps=excluded.bps,"
+                " yellow_cards=excluded.yellow_cards, start_cost=excluded.start_cost,"
+                " end_cost=excluded.end_cost, updated_at=excluded.updated_at",
+                season_rows,
+            )
+
+    return {"prices": len(price_rows), "seasons": len(season_rows)}
+
+
 # --- blank and double gameweeks -------------------------------------------
 
 
@@ -449,6 +530,7 @@ def player_fixture_counts(
 __all__ = [
     "IngestError",
     "blank_teams",
+    "ingest_element_summary",
     "double_teams",
     "fixtures_per_team",
     "ingest_fixtures",
