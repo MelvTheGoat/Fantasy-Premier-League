@@ -61,11 +61,15 @@ def current_stage(
     counts = _counts(connection)
     if not counts["players"]:
         return "reference"
+    # Locked picks are proof the whole pipeline ran, so they settle the
+    # question before any earlier stage's marker is consulted.
+    if counts["gameweeks"]:
+        return "ready"
     if not counts["seasons"]:
         return "history"
     # Before the season's first deadline there is nothing to replay, so an
     # empty picks table is the finished state rather than an unstarted one.
-    if not counts["gameweeks"] and gameweeks_underway(connection, now or datetime.now(UTC)):
+    if gameweeks_underway(connection, now or datetime.now(UTC)):
         return "backfill"
     return "ready"
 

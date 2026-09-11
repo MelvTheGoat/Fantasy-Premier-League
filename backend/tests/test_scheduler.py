@@ -263,7 +263,13 @@ def test_a_missed_deadline_is_repaired_by_the_backfill(db):
     """If the site was down over a deadline, the gameweek is reconstructed from
     the data that existed before it rather than picked with hindsight."""
     ready(db)
-    add_gameweek(db, 6, deadline=DEADLINE - timedelta(days=7), last_kickoff=LAST_KICKOFF - timedelta(days=7), average=51)
+    add_gameweek(
+        db,
+        6,
+        deadline=DEADLINE - timedelta(days=7),
+        last_kickoff=LAST_KICKOFF - timedelta(days=7),
+        average=51,
+    )
     lock(db, 6)
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
 

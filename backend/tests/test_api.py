@@ -8,6 +8,8 @@ behind it.
 from __future__ import annotations
 
 import json
+import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -77,6 +79,59 @@ class TestHealthAndIndex:
         """Not simply the API's current gameweek: between a deadline and the
         job that locks picks there is nothing to show for it."""
         assert client.get("/api/gameweeks").json()["current"] == 3
+
+
+class TestSetup:
+    """A fresh deployment fills its own database, and says so while it does."""
+
+    def test_a_seeded_database_reports_itself_ready(self, client):
+        body = client.get("/api/setup").json()
+        assert body["ready"] is True
+        assert body["stage"] == "ready"
+
+    def test_an_empty_database_says_what_it_is_waiting_for(self):
+        """Otherwise the first few minutes of a new deployment are
+        indistinguishable from a broken site."""
+        connection = connect(":memory:")
+        init_db(connection)
+        api_app.app.dependency_overrides[api_app.get_db] = lambda: connection
+        try:
+            body = TestClient(api_app.app).get("/api/setup").json()
+        finally:
+            api_app.app.dependency_overrides.clear()
+            connection.close()
+
+        assert body["ready"] is False
+        assert body["players"] == 0
+        assert body["message"]
+        assert 1 <= body["step"] <= body["steps"]
+
+    def test_the_scheduler_is_off_unless_it_is_asked_for(self, client):
+        """Running the API locally should not start calling the FPL API on a
+        timer. The container image turns it on."""
+        assert client.get("/api/setup").json()["scheduler"] is False
+
+    def test_the_scheduler_starts_with_the_app_when_it_is_turned_on(
+        self, db, monkeypatch
+    ):
+        started: list[int] = []
+        monkeypatch.setattr(
+            api_app, "settings", replace(api_app.settings, run_scheduler=True)
+        )
+        monkeypatch.setattr(
+            api_app.scheduler,
+            "start",
+            lambda interval: started.append(interval) or threading.Event(),
+        )
+
+        api_app.app.dependency_overrides[api_app.get_db] = lambda: db
+        try:
+            with TestClient(api_app.app) as running:
+                assert running.get("/api/setup").json()["scheduler"] is True
+        finally:
+            api_app.app.dependency_overrides.clear()
+
+        assert started == [api_app.settings.scheduler_interval]
 
 
 class TestGameweekView:

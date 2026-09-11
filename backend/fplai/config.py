@@ -25,6 +25,13 @@ def _env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     database_path: Path = _env_path("FPLAI_DB", PROJECT_ROOT / "data" / "fplai.sqlite3")
@@ -55,6 +62,15 @@ class Settings:
     hit_margin: float = _env_float("FPLAI_HIT_MARGIN", 2.0)
 
     final_gameweek: int = _env_int("FPLAI_FINAL_GAMEWEEK", 38)
+
+    #: Whether the web process also runs the scheduled jobs. Off by default,
+    #: because a developer running the API locally does not want it reaching
+    #: out to the FPL API on a timer; on in the container image, where there is
+    #: nowhere else for the jobs to run.
+    run_scheduler: bool = _env_flag("FPLAI_SCHEDULER", False)
+
+    #: Seconds between scheduler ticks.
+    scheduler_interval: int = _env_int("FPLAI_SCHEDULER_INTERVAL", 300)
 
     #: The built frontend. When present, the API serves it too, so the whole
     #: site runs as one service on one URL.

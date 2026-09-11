@@ -8,7 +8,8 @@ squad, so a slow request can never delay a deadline.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -18,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import settings
 from ..data.db import connect, init_db
+from ..jobs import scheduler
+from ..jobs.seed import setup_progress
 from . import views
 
 #: Where `npm run build` puts the frontend. When it exists it is served from
@@ -26,10 +29,34 @@ from . import views
 #: frontend itself and proxies `/api` here, so this stays empty and unused.
 FRONTEND_DIST = settings.frontend_dist
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Start the scheduler alongside the API, when this process is the one
+    running the jobs.
+
+    On a host that gives the database a persistent disk there is nowhere else
+    for them to run: the disk attaches to one service, and a scheduled-task
+    service would get an empty filesystem of its own. Locally it stays off, so
+    running the API does not start calling the FPL API on a timer.
+    """
+    stop = (
+        scheduler.start(settings.scheduler_interval)
+        if settings.run_scheduler
+        else None
+    )
+    try:
+        yield
+    finally:
+        if stop is not None:
+            stop.set()
+
+
 app = FastAPI(
     title="FPL AI Manager",
     description="Two models playing Fantasy Premier League, scored on real points.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # The frontend is served separately in development, so it needs to be allowed
@@ -73,6 +100,16 @@ def health(db: Database) -> dict[str, Any]:
         "players": players,
         "current_gameweek": views.current_gameweek(db),
     }
+
+
+@app.get("/api/setup")
+def setup(db: Database) -> dict[str, Any]:
+    """How far a fresh deployment has got in filling itself in.
+
+    A new container starts with an empty database and takes a few minutes to
+    pull the season down, which without this looks exactly like a broken site.
+    """
+    return {**setup_progress(db), "scheduler": settings.run_scheduler}
 
 
 @app.get("/api/models")
