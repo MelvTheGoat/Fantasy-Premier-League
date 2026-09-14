@@ -10,7 +10,9 @@
     fplai finalise --gameweek N       final points and the official average
     fplai status                      what the database currently knows
     fplai seed                        fill an empty database from scratch
-    fplai schedule                    run the scheduler in the foreground
+    fplai schedule [--once]           run the scheduler, or a single tick
+    fplai export --out DIR            write the whole site out as static files
+    fplai prune [--before N]          drop lookahead projections already used
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from .config import settings
 from .data.client import FPLAPIError, FPLClient
@@ -29,14 +32,16 @@ from .data.repository import (
     next_gameweek,
 )
 from .jobs.backfill import backfill
+from .jobs.export import export_site
 from .jobs.live import update_live
 from .jobs.pick import lock_gameweek
+from .jobs.prune import prune_projections
 from .jobs.refresh import (
     finalise_gameweek,
     refresh_player_histories,
     refresh_reference,
 )
-from .jobs.scheduler import TICK_SECONDS, run_forever
+from .jobs.scheduler import TICK_SECONDS, run_forever, tick
 from .jobs.score import score_gameweek_for_all_models, score_season, season_summaries
 from .jobs.seed import seed, setup_progress
 
@@ -92,6 +97,31 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.add_argument(
         "--interval", type=int, default=TICK_SECONDS, help="seconds between ticks"
     )
+    schedule.add_argument(
+        "--once",
+        action="store_true",
+        help="run a single tick and exit, for an external scheduler",
+    )
+
+    export = subparsers.add_parser(
+        "export", help="write the whole site out as static files"
+    )
+    export.add_argument("--out", type=Path, required=True, help="directory to write")
+    export.add_argument(
+        "--frontend",
+        type=Path,
+        default=settings.frontend_dist,
+        help="built frontend to publish alongside the API",
+    )
+
+    prune = subparsers.add_parser(
+        "prune", help="drop lookahead projections for gameweeks already played"
+    )
+    prune.add_argument(
+        "--before",
+        type=int,
+        help="keep everything from this gameweek on (default: the next one)",
+    )
     return parser
 
 
@@ -119,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
 def _dispatch(args, connection) -> int:
     """Route to the job. Commands that need the network open a client; the
     rest work entirely from what has already been ingested."""
-    if args.command == "schedule":
+    if args.command == "schedule" and not args.once:
         # Opens its own connection and its own client each tick, because it
         # outlives this call rather than being one job.
         print(f"scheduler running, ticking every {args.interval}s -- ^C to stop")
@@ -132,6 +162,8 @@ def _dispatch(args, connection) -> int:
         "backfill": _backfill,
         "pick": _pick,
         "score": _score,
+        "export": _export,
+        "prune": _prune,
     }
     if args.command in offline:
         return offline[args.command](args, connection)
@@ -170,6 +202,11 @@ def _dispatch(args, connection) -> int:
             scores = ", ".join(f"{m}={p}" for m, p in result["scores"].items())
             label = "final" if result["final"] else "provisional"
             print(f"GW{result['gameweek']}: {result['rows']} rows, {scores} ({label})")
+            return 0
+
+        if args.command == "schedule":
+            done = tick(connection, client)
+            print(", ".join(str(job) for job in done) if done else "nothing due")
             return 0
 
         if args.command == "seed":
@@ -234,6 +271,22 @@ def _score(args, connection) -> int:
             f"{summary.gameweeks_beating_average} times, hits "
             f"{summary.total_transfer_cost}"
         )
+    return 0
+
+
+def _export(args, connection) -> int:
+    counts = export_site(connection, args.out, frontend_dist=args.frontend)
+    print(
+        f"{args.out}: {counts['api_files']} API files, "
+        f"{counts['frontend_files']} frontend files"
+    )
+    return 0
+
+
+def _prune(args, connection) -> int:
+    before = args.before or next_gameweek(connection) or settings.final_gameweek
+    counts = prune_projections(connection, before)
+    print(f"dropped {counts['deleted']} lookahead projections made before GW{before}")
     return 0
 
 

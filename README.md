@@ -105,7 +105,9 @@ fplai score [--gameweek N]    # rescore stored picks
 fplai finalise --gameweek N   # final points and the official average
 fplai status                  # what the database currently knows
 fplai seed                    # fill an empty database from scratch
-fplai schedule                # run the scheduler in the foreground
+fplai schedule [--once]       # run the scheduler, or a single tick and exit
+fplai export --out DIR        # write the whole site out as static files
+fplai prune                   # drop lookahead projections already used
 ```
 
 `finalise` refuses to run before lockdown — 09:00 UK time on the day after the
@@ -294,25 +296,56 @@ Open `http://localhost:8000`. In development Vite serves the frontend itself
 and proxies `/api` to port 8000, so the frontend uses same-origin paths in both
 cases and nothing changes between them.
 
+### GitHub Actions and Pages
+
+The deployment that costs nothing. There is no server, because the site is
+read-only: it does not need one at runtime, only something that thinks once a
+week and leaves files behind. `.github/workflows/season.yml` does that on
+GitHub's runners, which are [free and unlimited for public
+repositories](https://docs.github.com/en/actions/concepts/billing-and-usage).
+
+Two settings, once:
+
+1. **Settings → Pages → Source: GitHub Actions.**
+2. **Settings → Actions → General → Workflow permissions: Read and write.**
+
+Then run the workflow (Actions → Season → Run workflow). The first run finds no
+database, builds one from scratch, and publishes to
+`https://<user>.github.io/<repo>/`. Every half hour after that it asks the
+database what is due, does it, and republishes.
+
+Three things about it are worth knowing, because they are not the obvious
+choices:
+
+**It runs every half hour rather than aiming at deadlines.** Scheduled
+workflows are queued, not guaranteed, and GitHub's scheduler runs late under
+load. The picking window is two hours wide so several runs land inside it. If
+every one of them is missed, the next run repairs it through the backfill,
+which reconstructs the gameweek from data that existed before its own deadline
+rather than picking with hindsight.
+
+**The season lives on a `season-data` branch, force-pushed as one commit.** The
+record is a SQLite file, and it has to outlive the runner. Keeping its history
+at half-hourly granularity would add gigabytes to the repository over a season
+for a binary nobody would ever read a diff of, so each run replaces it. The
+backup is the artifact every run uploads, kept for 30 days.
+
+**`fplai prune` runs before the file is stored.** The Manager projects several
+gameweeks ahead to judge whether a hit pays for itself, which is four fifths of
+the database and is spent the moment the deadline passes. The only projection
+read again is the gameweek's own, behind a tap on a player, and that stays.
+`test_pruning_changes_nothing_the_site_shows` is the guarantee: it publishes
+the site before and after and compares every file.
+
+The one maintenance task: [GitHub disables scheduled workflows after 60 days of
+repository
+inactivity](https://docs.github.com/actions/managing-workflow-runs/disabling-and-enabling-a-workflow),
+which the summer between seasons will trigger. Re-enable it in August.
+
+Because the repository is public, so is the published database. It holds picks
+and scores, and nothing else.
+
 ### Render
-
-Render reads `render.yaml`, so the whole deployment is: **New → Blueprint →
-pick this repository → Apply**. Nothing needs running afterwards. The service
-comes up with an empty database, notices, and fills it in — reference data,
-then every player's price history, then a replay of the season so far — showing
-on the page which of those it is doing. It takes a few minutes, most of it the
-price history, which is one polite request per player.
-
-The blueprint asks for the `starter` instance type rather than the free one,
-which costs a few dollars a month. That is not padding: the free tier has no
-disk, and it sleeps when idle. A deployment without a disk loses the whole
-season on every restart, and a sleeping one misses deadlines — and a deadline
-missed is a gameweek the Manager sat out.
-
-After that it drives itself. It refreshes and locks both squads in the two
-hours before each deadline, polls live points through the matches, and takes
-the final scores and the official average after lockdown. Pushing to the
-default branch redeploys it; the disk, and therefore the season, survives.
 
 ### With Docker
 

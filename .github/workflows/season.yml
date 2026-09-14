@@ -1,0 +1,132 @@
+# Plays the season and publishes the site, on GitHub's runners.
+#
+# This is the whole deployment. There is no server: the site is read-only, so
+# it does not need one at runtime, only something that thinks once a week and
+# leaves files behind. Every half hour this asks the database what is due --
+# lock a squad before a deadline, poll live points, take the final scores --
+# does it, and publishes the result to Pages.
+#
+# The season's record is a SQLite file, which has to outlive the runner. It
+# lives on the `season-data` branch, force-pushed as a single commit each time
+# rather than appended to. That is deliberate: at half-hourly runs, keeping the
+# history of a binary file would add gigabytes to the repository over a season
+# and nobody would ever read a line of it. Each run also uploads the file as an
+# artifact, which is the actual backup.
+
+name: Season
+
+on:
+  schedule:
+    # Every half hour. The picking window is two hours wide, so several runs
+    # fall inside it even when GitHub's scheduler is running late -- which it
+    # routinely is, and which is why this does not try to aim at deadlines.
+    - cron: '*/30 * * * *'
+  # Republish when the site's code changes, not only when the data does.
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Two runs would be two writers to one database.
+  group: season
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+env:
+  DB: backend/data/fplai.sqlite3
+
+jobs:
+  play:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the season so far
+        id: restore
+        run: |
+          mkdir -p "$(dirname "$DB")"
+          if git fetch --depth 1 origin season-data 2>/dev/null; then
+            git show FETCH_HEAD:fplai.sqlite3.gz > db.gz
+            gunzip -c db.gz > "$DB"
+            rm db.gz
+            echo "restored $(du -h "$DB" | cut -f1)"
+          else
+            # First run. The scheduler will notice the empty database and seed
+            # it, which takes about ten minutes -- one polite request per player.
+            echo "no season data yet; this run will build it from scratch"
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - run: pip install ./backend
+
+      - name: Do whatever is due
+        run: fplai schedule --once
+
+      - name: Drop the spent lookahead projections
+        run: fplai prune
+
+      - name: Store the season
+        run: |
+          gzip -9 -c "$DB" > fplai.sqlite3.gz
+          # A fresh single-commit branch each time, so the repository does not
+          # grow by the size of the database on every run.
+          rm -rf .season && mkdir .season
+          mv fplai.sqlite3.gz .season/
+          cd .season
+          git init -q -b season-data
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add fplai.sqlite3.gz
+          git commit -q -m "Season data: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" season-data
+
+      - name: Keep a copy that is not one force-push from gone
+        uses: actions/upload-artifact@v4
+        with:
+          name: season-${{ github.run_number }}
+          path: ${{ env.DB }}
+          retention-days: 30
+
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the frontend
+        working-directory: frontend
+        env:
+          # Pages serves from a repository subpath unless there is a custom
+          # domain, and a static host needs a real file extension on every
+          # response. The trailing slash is added here because `base_path` has
+          # none, and is empty at a domain root -- where this becomes just "/".
+          VITE_BASE: ${{ steps.pages.outputs.base_path }}/
+          VITE_API_SUFFIX: .json
+        run: |
+          npm ci
+          npm run build
+
+      - name: Render the site
+        run: fplai export --out site --frontend frontend/dist
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - uses: actions/deploy-pages@v4
+        id: deploy
