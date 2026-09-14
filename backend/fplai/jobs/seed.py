@@ -21,7 +21,7 @@ from ..data.client import FPLClient
 from ..data.repository import gameweeks_underway
 from .backfill import backfill
 from .refresh import refresh_player_histories, refresh_reference
-from .results import refresh_results
+from .results import missing_results, refresh_results
 from .score import score_season
 
 logger = logging.getLogger(__name__)
@@ -119,10 +119,15 @@ def seed(
     """
     logger.info("seeding an empty database")
 
-    if current_stage(connection) == "reference":
+    # Each step is guarded by its own inputs, not by the overall stage. A stage
+    # is a summary, and a summary that fails to move -- because a step ran and
+    # produced no rows, say -- would starve every step after it. Guarding each
+    # on what it needs means the worst case is repeated work, not a season that
+    # never gets scored.
+    if not _counts(connection)["players"]:
         refresh_reference(connection, client)
 
-    if current_stage(connection) == "history":
+    if not _counts(connection)["seasons"]:
         elements = None
         if history_limit:
             elements = [
@@ -134,12 +139,16 @@ def seed(
         # The slow one: a request per player, paced so the API is not hammered.
         refresh_player_histories(connection, client, elements=elements)
 
-    if current_stage(connection) == "results":
+    if missing_results(connection):
         refresh_results(connection, client)
 
-    if current_stage(connection) in {"backfill", "results"}:
-        backfill(connection)
-        score_season(connection)
+    # Unconditional, and last. Both skip work already done, so there is nothing
+    # to save by guarding them -- and guarding them is what broke this once
+    # already: fetching the results moved the stage to "ready", so the check
+    # that followed skipped the scoring the results were fetched for, and the
+    # site published a season of noughts beside a full set of results.
+    backfill(connection)
+    score_season(connection)
 
     progress = setup_progress(connection)
     logger.info("seed finished at stage %s: %s", progress["stage"], progress)

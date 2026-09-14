@@ -17,6 +17,7 @@ from fplai.data.db import connect, init_db, utcnow
 from fplai.jobs import scheduler, seed
 from fplai.jobs.results import missing_results
 from fplai.jobs.scheduler import Job, Task, due_work
+from fplai.jobs.score import gameweeks_with_a_stale_score
 
 UK = ZoneInfo("Europe/London")
 
@@ -114,12 +115,25 @@ def add_result(connection, gameweek: int, element: int = 1) -> None:
     )
 
 
+def add_score(connection, gameweek: int, points: int = 55) -> None:
+    """A stored score. Written after the result it derives from, as the jobs
+    write it -- a score older than its own results is stale by definition."""
+    for model in ("manager", "best_xi"):
+        connection.execute(
+            "INSERT INTO gameweek_results (model_id, gameweek, points_before_hits,"
+            " transfer_cost, points, bench_points, captain_points, is_final,"
+            " updated_at) VALUES (?, ?, ?, 0, ?, 0, 0, 0, ?)",
+            (model, gameweek, points, points, utcnow()),
+        )
+
+
 def ready(connection, played: int | None = None) -> None:
     """The minimum that makes a database look seeded rather than empty."""
     add_player(connection)
     add_history(connection)
     if played is not None:
         add_result(connection, played)
+        add_score(connection, played)
 
 
 # --- seeding ---------------------------------------------------------------
@@ -426,3 +440,49 @@ class TestResultsAreNeverAssumed:
 
         scheduler.run_job(db, StubClient(), Job(Task.CATCH_UP))
         assert order.index("refresh_results") < order.index("score_season")
+
+
+class TestAStaleScoreIsNoticed:
+    """A score is derived, so it can be wrong while nothing is missing. The
+    published site once showed a full set of results next to a season of
+    noughts, and nothing in the schedule would ever have corrected it.
+    """
+
+    def test_results_newer_than_the_score_make_it_stale(self, db):
+        ready(db, played=7)
+        add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
+        lock(db, 7)
+        assert gameweeks_with_a_stale_score(db) == []
+
+        # A correction lands after the gameweek was scored.
+        db.execute(
+            "UPDATE player_gameweek_stats SET total_points = 9, updated_at = ?"
+            " WHERE gameweek = 7",
+            ("2099-01-01T00:00:00+00:00",),
+        )
+        assert gameweeks_with_a_stale_score(db) == [7]
+
+    def test_results_with_no_score_at_all_count_as_stale(self, db):
+        ready(db)
+        add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
+        add_result(db, 7)
+        lock(db, 7)
+
+        assert gameweeks_with_a_stale_score(db) == [7]
+
+    def test_the_scheduler_rescores_it(self, db):
+        ready(db)
+        add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
+        add_result(db, 7)
+        lock(db, 7)
+
+        assert Job(Task.SCORE) in due_work(db, NOW)
+
+    def test_a_gameweek_nobody_picked_is_not_waiting_to_be_scored(self, db):
+        """Results arrive for every player in the league, most of whom are in
+        neither squad."""
+        ready(db)
+        add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
+        add_result(db, 7)
+
+        assert gameweeks_with_a_stale_score(db) == []

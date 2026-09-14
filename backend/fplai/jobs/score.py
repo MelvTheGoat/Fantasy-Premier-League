@@ -120,6 +120,33 @@ def store_gameweek_score(
         )
 
 
+def gameweeks_with_a_stale_score(connection: sqlite3.Connection) -> list[int]:
+    """Gameweeks whose stored score is older than the results behind it.
+
+    A score is derived, so it can be wrong without anything being missing.
+    Results that arrive after a score was written leave that score stale, and a
+    stale score is indistinguishable from a real one on the page -- which is
+    how a season of noughts came to be published next to a full set of results.
+
+    Comparing the two timestamps catches it whatever the cause: a fixture
+    corrected days later, an interrupted run, or a bug in the order jobs run in.
+    """
+    return [
+        row["gameweek"]
+        for row in connection.execute(
+            "SELECT results.gameweek FROM"
+            " (SELECT gameweek, MAX(updated_at) AS seen FROM player_gameweek_stats"
+            "   GROUP BY gameweek) AS results"
+            " JOIN (SELECT DISTINCT gameweek FROM locked_picks) AS picks"
+            "   ON picks.gameweek = results.gameweek"
+            " LEFT JOIN (SELECT gameweek, MIN(updated_at) AS scored FROM gameweek_results"
+            "   GROUP BY gameweek) AS scores ON scores.gameweek = results.gameweek"
+            " WHERE scores.scored IS NULL OR scores.scored < results.seen"
+            " ORDER BY results.gameweek"
+        )
+    ]
+
+
 def score_gameweek_for_all_models(
     connection: sqlite3.Connection,
     gameweek: int,
@@ -191,6 +218,7 @@ class _StoredScore:
 
 
 __all__ = [
+    "gameweeks_with_a_stale_score",
     "MODEL_IDS",
     "score_gameweek_for_all_models",
     "score_model_gameweek",

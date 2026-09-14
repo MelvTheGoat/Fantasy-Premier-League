@@ -39,7 +39,11 @@ from .live import update_live
 from .pick import lock_gameweek
 from .refresh import finalise_gameweek, refresh_reference
 from .results import missing_results, refresh_results
-from .score import score_gameweek_for_all_models, score_season
+from .score import (
+    gameweeks_with_a_stale_score,
+    score_gameweek_for_all_models,
+    score_season,
+)
 from .seed import current_stage, seed
 
 logger = logging.getLogger(__name__)
@@ -61,6 +65,7 @@ TICK_SECONDS = 300
 class Task(StrEnum):
     SEED = "seed"
     CATCH_UP = "catch-up"
+    SCORE = "score"
     PICK = "pick"
     LIVE = "live"
     FINALISE = "finalise"
@@ -172,6 +177,11 @@ def due_work(
     if _needs_catch_up(connection, moment) or missing_results(connection, moment):
         jobs.append(Job(Task.CATCH_UP))
 
+    # A score can be stale without anything being missing, so this is checked
+    # on its own rather than folded into the job that happened to write it.
+    if gameweeks_with_a_stale_score(connection):
+        jobs.append(Job(Task.SCORE))
+
     upcoming = next_gameweek(connection)
     if upcoming is not None and _pick_is_due(connection, upcoming, moment):
         jobs.append(Job(Task.PICK, upcoming))
@@ -201,6 +211,9 @@ def run_job(
     elif job.task is Task.PICK:
         refresh_reference(connection, client, gameweek=job.gameweek)
         lock_gameweek(connection, job.gameweek)
+
+    elif job.task is Task.SCORE:
+        score_season(connection)
 
     elif job.task is Task.LIVE:
         update_live(connection, client, gameweek=job.gameweek)
