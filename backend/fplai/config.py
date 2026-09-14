@@ -10,6 +10,23 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parent
 
 
+def _default_data_root() -> Path:
+    """Where data goes when the environment does not say.
+
+    Inside a source checkout that is `backend/data`, next to the code being
+    worked on. Installed, `PROJECT_ROOT` points into site-packages, and writing
+    a season there is wrong twice over: it is not the caller's data, and a
+    container or a CI runner discards it without saying so. The working
+    directory is at least somewhere the caller can see.
+    """
+    if (PROJECT_ROOT / "pyproject.toml").exists():
+        return PROJECT_ROOT / "data"
+    return Path.cwd() / "data"
+
+
+DATA_ROOT = _default_data_root()
+
+
 def _env_path(name: str, default: Path) -> Path:
     value = os.environ.get(name)
     return Path(value).expanduser() if value else default
@@ -34,8 +51,8 @@ def _env_flag(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    database_path: Path = _env_path("FPLAI_DB", PROJECT_ROOT / "data" / "fplai.sqlite3")
-    cache_dir: Path = _env_path("FPLAI_CACHE", PROJECT_ROOT / "data" / "cache")
+    database_path: Path = _env_path("FPLAI_DB", DATA_ROOT / "fplai.sqlite3")
+    cache_dir: Path = _env_path("FPLAI_CACHE", DATA_ROOT / "cache")
 
     fpl_base_url: str = os.environ.get(
         "FPLAI_FPL_BASE_URL", "https://fantasy.premierleague.com/api"
@@ -93,4 +110,4 @@ class Settings:
 
 settings = Settings()
 
-__all__ = ["PROJECT_ROOT", "Settings", "settings"]
+__all__ = ["DATA_ROOT", "PROJECT_ROOT", "Settings", "settings"]

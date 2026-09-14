@@ -37,7 +37,12 @@ permissions:
   id-token: write
 
 env:
-  DB: backend/data/fplai.sqlite3
+  # `fplai` is installed rather than run from the source tree, so its own
+  # default would put the database inside site-packages -- which the runner
+  # throws away. Everything below uses this one variable, so the job and the
+  # library cannot disagree about where the season lives.
+  FPLAI_DB: ${{ github.workspace }}/season/fplai.sqlite3
+  FPLAI_CACHE: ${{ github.workspace }}/season/cache
 
 jobs:
   play:
@@ -52,12 +57,12 @@ jobs:
       - name: Fetch the season so far
         id: restore
         run: |
-          mkdir -p "$(dirname "$DB")"
+          mkdir -p "$(dirname "$FPLAI_DB")"
           if git fetch --depth 1 origin season-data 2>/dev/null; then
             git show FETCH_HEAD:fplai.sqlite3.gz > db.gz
-            gunzip -c db.gz > "$DB"
+            gunzip -c db.gz > "$FPLAI_DB"
             rm db.gz
-            echo "restored $(du -h "$DB" | cut -f1)"
+            echo "restored $(du -h "$FPLAI_DB" | cut -f1)"
           else
             # First run. The scheduler will notice the empty database and seed
             # it, which takes about ten minutes -- one polite request per player.
@@ -72,14 +77,18 @@ jobs:
       - run: pip install ./backend
 
       - name: Do whatever is due
-        run: fplai schedule --once
+        run: |
+          fplai schedule --once
+          # Leaves the database's own account of itself in the log, which is
+          # the first thing worth seeing when a run goes wrong.
+          fplai status
 
       - name: Drop the spent lookahead projections
         run: fplai prune
 
       - name: Store the season
         run: |
-          gzip -9 -c "$DB" > fplai.sqlite3.gz
+          gzip -9 -c "$FPLAI_DB" > fplai.sqlite3.gz
           # A fresh single-commit branch each time, so the repository does not
           # grow by the size of the database on every run.
           rm -rf .season && mkdir .season
@@ -96,7 +105,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: season-${{ github.run_number }}
-          path: ${{ env.DB }}
+          path: ${{ env.FPLAI_DB }}
           retention-days: 30
 
       - uses: actions/configure-pages@v5

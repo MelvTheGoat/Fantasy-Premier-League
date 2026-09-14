@@ -21,3 +21,6 @@ dist/
 
 # build output
 build/
+
+# the season, when running the jobs locally
+season/

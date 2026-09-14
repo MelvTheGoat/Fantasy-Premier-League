@@ -185,3 +185,26 @@ class TestFinalise:
         refresh_reference(db, client, gameweek=CURRENT_GAMEWEEK)
         now = datetime(2027, 6, 1, tzinfo=UTC)
         assert finalise_gameweek(db, client, 30, now=now) is False
+
+
+class TestDefaultPaths:
+    """Where the database goes when nothing says otherwise."""
+
+    def test_a_source_checkout_keeps_its_data_beside_the_code(self):
+        from fplai.config import PROJECT_ROOT, _default_data_root
+
+        assert _default_data_root() == PROJECT_ROOT / "data"
+
+    def test_an_installed_copy_does_not_write_into_site_packages(self, monkeypatch, tmp_path):
+        """An installed package has no pyproject.toml beside it, and a season
+        written into site-packages is silently discarded by any container or CI
+        runner -- which is exactly how it fails: the jobs all succeed and the
+        result disappears."""
+        from fplai import config
+
+        installed = tmp_path / "site-packages" / "fplai"
+        installed.mkdir(parents=True)
+        monkeypatch.setattr(config, "PROJECT_ROOT", installed.parent)
+        monkeypatch.chdir(tmp_path)
+
+        assert config._default_data_root() == tmp_path / "data"
