@@ -35,6 +35,10 @@ settings — see [`docs/rules-sources.md`](docs/rules-sources.md) for the field
 behind each one, two API changes for 2026/27 that invalidate older approaches,
 and the single value still unconfirmed.
 
+[`docs/how-it-works.md`](docs/how-it-works.md) is the longer read: why each
+layer is shaped the way it is, what the no-leakage rule costs to enforce, the
+four bugs that reached the published site and what they had in common.
+
 ## Setup
 
 ```sh
