@@ -38,6 +38,7 @@ from .backfill import backfill
 from .live import update_live
 from .pick import lock_gameweek
 from .refresh import finalise_gameweek, refresh_reference
+from .results import missing_results, refresh_results
 from .score import score_gameweek_for_all_models, score_season
 from .seed import current_stage, seed
 
@@ -168,7 +169,7 @@ def due_work(
         for gameweek in _awaiting_finalisation(connection, moment)
     ]
 
-    if _needs_catch_up(connection, moment):
+    if _needs_catch_up(connection, moment) or missing_results(connection, moment):
         jobs.append(Job(Task.CATCH_UP))
 
     upcoming = next_gameweek(connection)
@@ -191,6 +192,9 @@ def run_job(
 
     elif job.task is Task.CATCH_UP:
         refresh_reference(connection, client)
+        # Before the replay, because a squad scored against no results at all
+        # comes out as nought rather than as a failure.
+        refresh_results(connection, client)
         backfill(connection)
         score_season(connection)
 

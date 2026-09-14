@@ -15,6 +15,7 @@ import pytest
 
 from fplai.data.db import connect, init_db, utcnow
 from fplai.jobs import scheduler, seed
+from fplai.jobs.results import missing_results
 from fplai.jobs.scheduler import Job, Task, due_work
 
 UK = ZoneInfo("Europe/London")
@@ -104,10 +105,21 @@ def lock(connection, gameweek: int, *, element: int = 1) -> None:
         )
 
 
-def ready(connection) -> None:
+def add_result(connection, gameweek: int, element: int = 1) -> None:
+    """A real result. Without one, a database full of squads scores as zeros."""
+    connection.execute(
+        "INSERT INTO player_gameweek_stats (player_id, gameweek, fixture_id,"
+        " minutes, total_points, updated_at) VALUES (?, ?, ?, 90, 5, ?)",
+        (element, gameweek, gameweek, utcnow()),
+    )
+
+
+def ready(connection, played: int | None = None) -> None:
     """The minimum that makes a database look seeded rather than empty."""
     add_player(connection)
     add_history(connection)
+    if played is not None:
+        add_result(connection, played)
 
 
 # --- seeding ---------------------------------------------------------------
@@ -130,7 +142,7 @@ def test_seeding_displaces_every_other_job(db):
 
 
 def test_a_seeded_database_has_nothing_to_do_between_gameweeks(db):
-    ready(db)
+    ready(db, played=7)
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, average=52)
     lock(db, 7)
     add_gameweek(db, 8, deadline=DEADLINE + timedelta(days=7), next_up=True)
@@ -194,7 +206,7 @@ def test_one_model_locked_is_not_enough(db):
 
 
 def test_live_points_are_pulled_while_the_gameweek_is_being_played(db):
-    ready(db)
+    ready(db, played=7)
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
     lock(db, 7)
 
@@ -204,7 +216,7 @@ def test_live_points_are_pulled_while_the_gameweek_is_being_played(db):
 
 def test_live_polling_continues_between_the_last_match_and_lockdown(db):
     """Bonus points are not settled when the final whistle goes."""
-    ready(db)
+    ready(db, played=7)
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
     lock(db, 7)
 
@@ -213,7 +225,7 @@ def test_live_polling_continues_between_the_last_match_and_lockdown(db):
 
 
 def test_live_polling_stops_at_lockdown(db):
-    ready(db)
+    ready(db, played=7)
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
     lock(db, 7)
 
@@ -225,7 +237,7 @@ def test_live_polling_stops_at_lockdown(db):
 
 
 def test_a_gameweek_past_lockdown_is_finalised(db):
-    ready(db)
+    ready(db, played=7)
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
     lock(db, 7)
 
@@ -235,7 +247,7 @@ def test_a_gameweek_past_lockdown_is_finalised(db):
 def test_a_gameweek_with_an_official_average_is_left_alone(db):
     """`average_entry_score` only exists once FPL has checked the gameweek,
     which is the same moment its points stop moving."""
-    ready(db)
+    ready(db, played=7)
     add_gameweek(
         db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, average=48, current=True
     )
@@ -247,7 +259,7 @@ def test_a_gameweek_with_an_official_average_is_left_alone(db):
 def test_finalising_comes_before_the_next_gameweeks_picks(db):
     """The Manager's bank, squad value and free transfers carry forward, so a
     gameweek has to be closed before the next one is decided."""
-    ready(db)
+    ready(db, played=7)
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
     lock(db, 7)
     add_gameweek(db, 8, deadline=LOCKDOWN + timedelta(hours=2), next_up=True)
@@ -262,7 +274,8 @@ def test_finalising_comes_before_the_next_gameweeks_picks(db):
 def test_a_missed_deadline_is_repaired_by_the_backfill(db):
     """If the site was down over a deadline, the gameweek is reconstructed from
     the data that existed before it rather than picked with hindsight."""
-    ready(db)
+    ready(db, played=6)
+    add_result(db, 7)
     add_gameweek(
         db,
         6,
@@ -292,7 +305,7 @@ class StubClient:
 
 
 def test_a_failing_job_does_not_stop_the_ones_after_it(db, monkeypatch):
-    ready(db)
+    ready(db, played=7)
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
     lock(db, 7)
     add_gameweek(db, 8, deadline=LOCKDOWN + timedelta(hours=2), next_up=True)
@@ -321,6 +334,8 @@ def test_setup_progress_reports_each_stage_in_turn(db):
     add_player(db)
     assert seed.current_stage(db, NOW) == "history"
     add_history(db)
+    assert seed.current_stage(db, NOW) == "results"
+    add_result(db, 7)
     assert seed.current_stage(db, NOW) == "backfill"
     lock(db, 7)
     assert seed.current_stage(db, NOW) == "ready"
@@ -329,7 +344,7 @@ def test_setup_progress_reports_each_stage_in_turn(db):
 def test_a_stage_is_read_from_the_rows_it_produced(db):
     """Not from a stored flag: a flag survives a crash that the work did not,
     and then the site reports progress it never made."""
-    ready(db)
+    ready(db, played=7)
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
 
     progress = seed.setup_progress(db, NOW)
@@ -351,3 +366,63 @@ def test_before_the_first_deadline_an_empty_picks_table_is_the_finished_state(db
 
     assert seed.current_stage(db, pre_season) == "ready"
     assert due_work(db, pre_season) == []
+
+
+# --- the season of zeros ---------------------------------------------------
+
+
+class TestResultsAreNeverAssumed:
+    """A database can hold a full set of squads and no results at all. That
+    scores as nought rather than as a failure, which is the kind of wrong that
+    gets published and believed -- it is what the first live deployment did.
+    """
+
+    def test_squads_without_results_are_not_a_finished_setup(self, db):
+        ready(db)  # players and history, but nothing played ingested
+        add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
+        lock(db, 7)
+
+        assert seed.current_stage(db, NOW) == "results"
+        assert seed.setup_progress(db, NOW)["ready"] is False
+
+    def test_the_scheduler_goes_and_gets_them(self, db):
+        ready(db)
+        add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
+        lock(db, 7)
+
+        assert Job(Task.SEED) in due_work(db, NOW)
+
+    def test_a_played_gameweek_with_no_result_is_reported_missing(self, db):
+        ready(db)
+        add_gameweek(
+            db,
+            6,
+            deadline=DEADLINE - timedelta(days=7),
+            last_kickoff=LAST_KICKOFF - timedelta(days=7),
+        )
+        add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
+        add_result(db, 6)
+
+        assert missing_results(db, NOW) == [7]
+
+    def test_a_gameweek_not_yet_played_is_not_missing_anything(self, db):
+        ready(db)
+        add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
+
+        assert missing_results(db, DEADLINE - timedelta(days=3)) == []
+
+    def test_catching_up_collects_results_before_replaying(self, db, monkeypatch):
+        """Order matters: the replay decides the squads, and the scoring that
+        follows needs the real points to already be there."""
+        ready(db)
+        add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
+        lock(db, 7)
+
+        order: list[str] = []
+        for name in ("refresh_reference", "refresh_results", "backfill", "score_season"):
+            monkeypatch.setattr(
+                scheduler, name, lambda *a, _n=name, **k: order.append(_n)
+            )
+
+        scheduler.run_job(db, StubClient(), Job(Task.CATCH_UP))
+        assert order.index("refresh_results") < order.index("score_season")

@@ -6,6 +6,7 @@
 const STAGES = [
   { id: 'reference', label: 'Players, teams and fixtures' },
   { id: 'history', label: 'Price history' },
+  { id: 'results', label: 'Real points so far' },
   { id: 'backfill', label: 'Replaying the season' },
 ]
 

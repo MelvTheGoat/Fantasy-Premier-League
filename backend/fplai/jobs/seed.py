@@ -21,6 +21,7 @@ from ..data.client import FPLClient
 from ..data.repository import gameweeks_underway
 from .backfill import backfill
 from .refresh import refresh_player_histories, refresh_reference
+from .results import refresh_results
 from .score import score_season
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 STAGES: tuple[tuple[str, str], ...] = (
     ("reference", "Downloading players, teams and fixtures"),
     ("history", "Reading every player's price history"),
+    ("results", "Collecting the real points so far"),
     ("backfill", "Replaying the season so far"),
     ("ready", "Ready"),
 )
@@ -43,6 +45,7 @@ def _counts(connection: sqlite3.Connection) -> dict[str, int]:
     return {
         "players": count("players"),
         "seasons": count("player_season_history"),
+        "results": count("player_gameweek_stats"),
         "gameweeks": connection.execute(
             "SELECT COUNT(DISTINCT gameweek) c FROM locked_picks"
         ).fetchone()["c"],
@@ -61,17 +64,26 @@ def current_stage(
     counts = _counts(connection)
     if not counts["players"]:
         return "reference"
-    # Locked picks are proof the whole pipeline ran, so they settle the
-    # question before any earlier stage's marker is consulted.
-    if counts["gameweeks"]:
-        return "ready"
     if not counts["seasons"]:
         return "history"
-    # Before the season's first deadline there is nothing to replay, so an
-    # empty picks table is the finished state rather than an unstarted one.
-    if gameweeks_underway(connection, now or datetime.now(UTC)):
-        return "backfill"
-    return "ready"
+
+    # Before the season's first deadline nothing has been played and there is
+    # nothing to replay, so empty tables are the finished state rather than an
+    # unstarted one.
+    played = gameweeks_underway(connection, now or datetime.now(UTC))
+    if not played:
+        return "ready"
+
+    # Checked before the picks are, and that order is the whole point: a
+    # database can hold a full set of squads and no results at all, and scoring
+    # those squads comes out as nought rather than as an error. A season of
+    # zeros looks like a season that went badly, not like a broken deployment,
+    # so it gets published and believed.
+    if not counts["results"]:
+        return "results"
+
+    # Locked picks are then proof the rest of the pipeline ran.
+    return "ready" if counts["gameweeks"] else "backfill"
 
 
 def setup_progress(
@@ -122,7 +134,10 @@ def seed(
         # The slow one: a request per player, paced so the API is not hammered.
         refresh_player_histories(connection, client, elements=elements)
 
-    if current_stage(connection) == "backfill":
+    if current_stage(connection) == "results":
+        refresh_results(connection, client)
+
+    if current_stage(connection) in {"backfill", "results"}:
         backfill(connection)
         score_season(connection)
 

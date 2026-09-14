@@ -71,15 +71,22 @@ fplai seed           # everything, in the only order that works
 python -m fplai.api.app
 ```
 
-`seed` is the four steps below run in sequence, and each is skipped if its work
-is already done, so an interrupted seed picks up where it stopped:
+`seed` is the steps below run in sequence, and each is skipped if its work is
+already done, so an interrupted seed picks up where it stopped:
 
 ```sh
 fplai refresh        # players, teams, prices, fixtures       (~2s)
 fplai history        # per-player price history, past seasons (~1-10 min)
+fplai results        # real points for every gameweek played  (~4s)
 fplai backfill       # replay every gameweek so far           (~4s)
 fplai score          # score both models against the average
 ```
+
+`results` is neither optional nor cosmetic. Scoring a stored squad against a
+database holding no results does not fail: it comes out as nought, and a season
+of zeros reads as a season that went badly rather than as a broken deployment.
+The setup stages therefore treat squads-without-results as unfinished, so the
+site says what it is doing instead of publishing them.
 
 ```sh
 cd frontend
@@ -106,6 +113,7 @@ fplai finalise --gameweek N   # final points and the official average
 fplai status                  # what the database currently knows
 fplai seed                    # fill an empty database from scratch
 fplai schedule [--once]       # run the scheduler, or a single tick and exit
+fplai results                 # real points for gameweeks already played
 fplai export --out DIR        # write the whole site out as static files
 fplai prune                   # drop lookahead projections already used
 ```

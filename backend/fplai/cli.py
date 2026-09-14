@@ -13,6 +13,7 @@
     fplai schedule [--once]           run the scheduler, or a single tick
     fplai export --out DIR            write the whole site out as static files
     fplai prune [--before N]          drop lookahead projections already used
+    fplai results                     real points for gameweeks already played
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from .jobs.refresh import (
     refresh_player_histories,
     refresh_reference,
 )
+from .jobs.results import refresh_results
 from .jobs.scheduler import TICK_SECONDS, run_forever, tick
 from .jobs.score import score_gameweek_for_all_models, score_season, season_summaries
 from .jobs.seed import seed, setup_progress
@@ -112,6 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=settings.frontend_dist,
         help="built frontend to publish alongside the API",
+    )
+
+    subparsers.add_parser(
+        "results", help="pull real points for gameweeks that have been played"
     )
 
     prune = subparsers.add_parser(
@@ -207,6 +213,12 @@ def _dispatch(args, connection) -> int:
         if args.command == "schedule":
             done = tick(connection, client)
             print(", ".join(str(job) for job in done) if done else "nothing due")
+            return 0
+
+        if args.command == "results":
+            counts = refresh_results(connection, client)
+            score_season(connection)
+            print(f"{counts['gameweeks']} gameweeks, {counts['rows']} rows")
             return 0
 
         if args.command == "seed":

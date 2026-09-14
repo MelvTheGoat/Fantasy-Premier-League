@@ -45,6 +45,13 @@ def db():
     ingest_fixtures(connection, load("fixtures.json"))
     for gameweek in (1, 2, 3):
         ingest_live_gameweek(connection, gameweek, load("event_3_live.json"))
+    # A past season for one player: element summaries are not part of these
+    # fixtures, but a database with none at all is an unfinished seed rather
+    # than a working site.
+    connection.execute(
+        "INSERT INTO player_season_history (player_id, season_name, updated_at)"
+        " SELECT id, '2025/26', datetime('now') FROM players LIMIT 1"
+    )
     backfill(connection, through_gameweek=3, horizon=3)
     score_season(connection)
     yield connection
