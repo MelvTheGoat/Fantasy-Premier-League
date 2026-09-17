@@ -129,8 +129,9 @@ def build_histories(
     past = {
         row["player_id"]: row
         for row in connection.execute(
-            "SELECT player_id, SUM(minutes) minutes, SUM(goals_scored) goals,"
-            "       SUM(assists) assists, SUM(saves) saves, SUM(bps) bps"
+            "SELECT player_id, COUNT(*) seasons, SUM(minutes) minutes,"
+            "       SUM(goals_scored) goals, SUM(assists) assists,"
+            "       SUM(saves) saves, SUM(bps) bps"
             " FROM player_season_history GROUP BY player_id"
         )
     }
@@ -163,6 +164,7 @@ def build_histories(
             defcon_hits=int(total["defcons"] or 0) if total else 0,
             bps=int(total["bps"] or 0) if total else 0,
             yellow_cards=int(total["yellows"] or 0) if total else 0,
+            prior_seasons=int(past_row["seasons"] or 0) if past_row else 0,
             prior_minutes=int(past_row["minutes"] or 0) if past_row else 0,
             prior_goals=float(past_row["goals"] or 0) if past_row else 0.0,
             prior_assists=float(past_row["assists"] or 0) if past_row else 0.0,

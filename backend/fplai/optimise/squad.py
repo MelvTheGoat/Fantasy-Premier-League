@@ -47,6 +47,13 @@ BENCH_WEIGHT = 0.12
 #: first when a starter blanks, so its weight is scaled up.
 BENCH_SLOT_WEIGHTS = (0.20, 0.10, 0.06)
 
+#: How much a bench player's *value* -- projected points per million -- counts
+#: alongside the points themselves. Small on purpose: it decides between two
+#: candidates for a bench slot, and must never pull a genuine starter out of
+#: the eleven to save money. Its point is to find the cheap player who is
+#: already performing, early, while he is still cheap.
+BENCH_VALUE_WEIGHT = 0.6
+
 #: Solver time limit. The problem is small -- 655 players, a few dozen
 #: constraints -- and normally solves in well under a second.
 SOLVER_TIME_LIMIT = 30
@@ -180,9 +187,19 @@ def optimise_squad(
 
     # Starters count fully, bench players at a fraction, and the captain's
     # projection is counted an extra time for the doubling.
+    #
+    # Bench players also earn on value -- points per million rather than points
+    # -- because a bench slot's job is not to score, it is to cost little and
+    # still be worth starting when a defender is dropped. A cheap player who
+    # projects well is worth more there than an expensive one projecting
+    # slightly better, and buying him while he is cheap is the only way the
+    # squad's value ever grows.
     problem += pulp.lpSum(
         points.get(e, 0.0) * in_xi[e]
         + points.get(e, 0.0) * bench_weight * (in_squad[e] - in_xi[e])
+        + (points.get(e, 0.0) / max(prices[e] / 10.0, 0.1))
+        * BENCH_VALUE_WEIGHT
+        * (in_squad[e] - in_xi[e])
         + points.get(e, 0.0) * (captain_multiplier - 1) * is_captain[e]
         for e in candidates
     )

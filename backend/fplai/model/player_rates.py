@@ -91,6 +91,32 @@ START_PRIOR_MATCHES = 1.0
 BASELINE_START_RATE = 0.35
 BASELINE_APPEARANCE_RATE = 0.55
 
+#: Matches in a Premier League season, for turning prior-season minutes into a
+#: share of the minutes that were available to play.
+MATCHES_PER_SEASON = 38
+
+#: The share of a season's available minutes a nailed-on starter actually
+#: plays. Not 1.0: a player who starts every week is still substituted, rested
+#: and occasionally injured, and 0.80 is about what an ever-present looks like.
+NAILED_STARTER_SHARE = 0.80
+
+#: How much extra a player appears beyond starting, when all that is known is
+#: prior-season minutes. Substitutes come on; starters do not un-start.
+PRIOR_CAMEO_MARGIN = 0.10
+
+#: How many matches of evidence prior seasons are worth when judging whether a
+#: player starts *now*, before this season has produced any. Capped hard and
+#: deliberately: four seasons of minutes would otherwise outweigh this season
+#: sixty to one.
+PRIOR_START_MATCHES_CAP = 10.0
+
+#: How quickly the prior above fades as this season accumulates. A prior is a
+#: place to start, not a standing opinion: a player who started every match
+#: last season and none of his club's last six has lost his place, and the
+#: model has to say so rather than average the two. At this many matches of
+#: current evidence the prior is already halved.
+PRIOR_FADE_MATCHES = 3.0
+
 
 @dataclass(frozen=True, slots=True)
 class PlayerHistory:
@@ -120,6 +146,9 @@ class PlayerHistory:
     bps: int = 0
     yellow_cards: int = 0
 
+    #: How many prior seasons `prior_minutes` covers. Needed to read those
+    #: minutes as a share of what was available rather than as a raw total.
+    prior_seasons: int = 0
     prior_minutes: int = 0
     prior_goals: float = 0.0
     prior_assists: float = 0.0
@@ -222,6 +251,77 @@ def availability_multiplier(history: PlayerHistory) -> float:
     return 1.0
 
 
+def prior_playing_time(history: PlayerHistory) -> tuple[float, float] | None:
+    """Start and appearance rates inferred from prior seasons, or None.
+
+    FPL's per-season history records minutes but not starts, so the share of
+    available minutes stands in for both. The two are not the same thing -- a
+    substitute who plays twenty minutes every week and a starter withdrawn on
+    the hour can arrive at similar numbers -- but it cleanly separates a
+    nailed-on starter from a squad player, and that is the distinction the
+    model was missing entirely.
+
+    Without this, every player begins a season on the same squad-player
+    baseline: a striker with four seasons of 2,900 minutes and a substitute
+    who has never started are given the same chance of playing, which halves
+    the good players' projections and flattens the ordering the optimiser
+    depends on.
+    """
+    if history.prior_seasons <= 0 or history.prior_minutes <= 0:
+        return None
+
+    available = history.prior_seasons * MATCHES_PER_SEASON * 90.0
+    share = history.prior_minutes / available
+    start = min(share / NAILED_STARTER_SHARE, 1.0)
+    return start, min(start + PRIOR_CAMEO_MARGIN, 1.0)
+
+
+def _playing_time(history: PlayerHistory) -> tuple[float, float]:
+    """How likely this player is to start, and to appear at all.
+
+    Three sources, in descending order of relevance: what he has done in his
+    club's recent matches, what prior seasons say, and -- failing both -- the
+    assumption that an unknown is a squad player. They are pooled by how much
+    evidence each carries, so this season overtakes last season within weeks.
+    """
+    if history.recent_matches:
+        own_matches = float(history.recent_matches)
+        own_start = history.recent_starts / history.recent_matches
+        own_appear = history.recent_appearances / history.recent_matches
+    elif history.matches_available:
+        own_matches = float(history.matches_available)
+        own_start = history.starts / history.matches_available
+        own_appear = history.appearances / history.matches_available
+    else:
+        own_matches, own_start, own_appear = 0.0, 0.0, 0.0
+
+    prior = prior_playing_time(history)
+    prior_matches = 0.0
+    prior_start = prior_appear = 0.0
+    if prior is not None:
+        prior_start, prior_appear = prior
+        prior_matches = min(
+            history.prior_seasons * MATCHES_PER_SEASON * PRIOR_SEASON_WEIGHT,
+            PRIOR_START_MATCHES_CAP,
+        )
+        # Fades as this season speaks for itself.
+        prior_matches /= 1.0 + own_matches / PRIOR_FADE_MATCHES
+
+    evidence = own_matches + prior_matches
+    if evidence <= 0:
+        return BASELINE_START_RATE, BASELINE_APPEARANCE_RATE
+
+    pooled_start = (own_start * own_matches + prior_start * prior_matches) / evidence
+    pooled_appear = (own_appear * own_matches + prior_appear * prior_matches) / evidence
+
+    # Whatever evidence there is still gets pulled toward the squad-player
+    # baseline, so one appearance never reads as nailed-on.
+    confidence = evidence / (evidence + START_PRIOR_MATCHES)
+    start = confidence * pooled_start + (1 - confidence) * BASELINE_START_RATE
+    appear = confidence * pooled_appear + (1 - confidence) * BASELINE_APPEARANCE_RATE
+    return start, max(appear, start)
+
+
 def estimate_rates(history: PlayerHistory) -> PlayerRates:
     """Turn a player's record into the rates the points model needs."""
     base = POSITION_PRIORS[history.position]
@@ -230,25 +330,7 @@ def estimate_rates(history: PlayerHistory) -> PlayerRates:
         for metric, value in base.items()
     }
 
-    if history.recent_matches:
-        raw_start = history.recent_starts / history.recent_matches
-        raw_appear = history.recent_appearances / history.recent_matches
-    elif history.matches_available:
-        raw_start = history.starts / history.matches_available
-        raw_appear = history.appearances / history.matches_available
-    else:
-        # Nothing to go on: assume a squad player rather than a starter.
-        raw_start, raw_appear = BASELINE_START_RATE, BASELINE_APPEARANCE_RATE
-
-    # A player with no minutes at all is a genuine unknown, not a confirmed
-    # non-starter, so the estimate is pulled toward a squad-player baseline.
-    sample = history.recent_matches or history.matches_available
-    confidence = sample / (sample + START_PRIOR_MATCHES) if sample else 0.0
-    start_probability = confidence * raw_start + (1 - confidence) * BASELINE_START_RATE
-    appear_probability = (
-        confidence * raw_appear + (1 - confidence) * BASELINE_APPEARANCE_RATE
-    )
-    appear_probability = max(appear_probability, start_probability)
+    start_probability, appear_probability = _playing_time(history)
 
     available = availability_multiplier(history)
     start_probability *= available

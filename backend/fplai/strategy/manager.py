@@ -54,8 +54,12 @@ MODEL_ID = "manager"
 HORIZON_DECAY = 0.82
 
 #: The most transfers the Manager will consider making in one gameweek without
-#: a chip. Beyond three the hits swamp any plausible gain.
-MAX_TRANSFERS_CONSIDERED = 3
+#: a chip. Five, not three: a second or third −4 is occasionally right -- an
+#: injured defender and a suspended striker in the same week are not a reason
+#: to fix only one of them -- and the gain still has to clear every point it
+#: costs before any of them is taken. The cap exists to bound the optimiser's
+#: work, not to express an opinion about how many hits are sensible.
+MAX_TRANSFERS_CONSIDERED = 5
 
 #: What each chip has to be worth before it is played, in projected points.
 #:
@@ -66,20 +70,25 @@ MAX_TRANSFERS_CONSIDERED = 3
 #: Each bar is instead set where that chip's *good* week starts, which in
 #: practice means a double gameweek or a blank:
 #:
-#:   Bench Boost     a normal bench projects six to nine; sixteen means most of
-#:                   the bench has two fixtures
-#:   Triple Captain  ten-plus from one player is a double gameweek or a
-#:                   premium in a very soft fixture
-#:   Free Hit        twelve points better than the current squad means several
-#:                   players are blanking
-#:   Wildcard        twenty over the whole horizon, because a Wildcard is the
+#:   Bench Boost     a normal bench projects eight to twelve; twenty-two means
+#:                   most of the bench has two fixtures
+#:   Triple Captain  twelve-plus from one player is a double gameweek, or a
+#:                   premium in form against a very soft single fixture
+#:   Free Hit        eighteen points better than the current squad means
+#:                   several players are blanking
+#:   Wildcard        thirty over the whole horizon, because a Wildcard is the
 #:                   only chip whose benefit persists, and spending it early
 #:                   forfeits the option later
+#:
+#: These were raised when the minutes model was fixed. They had been set
+#: against projections that halved every nailed-on starter, so a bar that read
+#: as "an exceptional week" then reads as "most weeks" now. Thresholds are
+#: calibrated against the model that produces them and have to move with it.
 CHIP_THRESHOLDS: dict[Chip, float] = {
-    Chip.BENCH_BOOST: 16.0,
-    Chip.TRIPLE_CAPTAIN: 10.0,
-    Chip.FREE_HIT: 12.0,
-    Chip.WILDCARD: 20.0,
+    Chip.BENCH_BOOST: 22.0,
+    Chip.TRIPLE_CAPTAIN: 12.0,
+    Chip.FREE_HIT: 18.0,
+    Chip.WILDCARD: 30.0,
 }
 
 #: The earliest gameweek the Manager will wildcard without being forced to.

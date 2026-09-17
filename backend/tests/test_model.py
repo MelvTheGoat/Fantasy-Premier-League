@@ -380,3 +380,71 @@ class TestGameweekProjection:
         assert sum(projection.components().values()) == pytest.approx(
             projection.expected_points
         )
+
+
+class TestPriorSeasonsInformPlayingTime:
+    """Before this season has produced any evidence, last season is all there
+    is -- and ignoring it was a real bug. Every player began a season on the
+    same squad-player baseline, which halved the projection of every nailed-on
+    starter and flattened the ordering the optimiser depends on.
+    """
+
+    def test_an_established_starter_is_not_a_squad_player_in_gameweek_one(self):
+        """Four seasons at roughly 2,900 minutes is an ever-present. Before
+        the fix this player was given a 35% chance of starting, the same as a
+        debutant nobody has seen."""
+        rates = estimate_rates(
+            PlayerHistory(
+                element=1, position=Position.FWD, price=150,
+                prior_seasons=4, prior_minutes=11_000,
+            )
+        )
+        assert rates.probability_of_starting > 0.85
+        assert rates.expected_minutes > 65
+
+    def test_a_prior_season_substitute_is_still_a_substitute(self):
+        """The signal has to cut both ways, or it is just a bonus for having
+        played before."""
+        rates = estimate_rates(
+            PlayerHistory(
+                element=2, position=Position.MID, price=45,
+                prior_seasons=2, prior_minutes=900,
+            )
+        )
+        assert rates.probability_of_starting < 0.3
+
+    def test_a_player_nobody_has_ever_seen_falls_back_to_the_baseline(self):
+        rates = estimate_rates(
+            PlayerHistory(element=3, position=Position.MID, price=50)
+        )
+        assert 0.2 < rates.probability_of_starting < 0.5
+
+    def test_this_season_overtakes_last_season(self):
+        """A player who started all of last season but has not started any of
+        his club's last six matches has lost his place. Prior seasons are
+        capped precisely so that this is believed within weeks."""
+        dropped = estimate_rates(
+            PlayerHistory(
+                element=4, position=Position.MID, price=70,
+                prior_seasons=3, prior_minutes=8_500,
+                recent_matches=6, recent_starts=0, recent_appearances=1,
+                matches_available=6, starts=0, appearances=1,
+            )
+        )
+        assert dropped.probability_of_starting < 0.4
+
+    def test_prior_seasons_cannot_outweigh_a_full_season_of_evidence(self):
+        """Capped at ten matches of equivalent evidence: without the cap, four
+        seasons of minutes outweigh this season roughly sixty to one."""
+        history = PlayerHistory(
+            element=5, position=Position.DEF, price=55,
+            prior_seasons=4, prior_minutes=12_000,
+        )
+        from fplai.model.player_rates import (
+            MATCHES_PER_SEASON,
+            PRIOR_SEASON_WEIGHT,
+            PRIOR_START_MATCHES_CAP,
+        )
+
+        uncapped = history.prior_seasons * MATCHES_PER_SEASON * PRIOR_SEASON_WEIGHT
+        assert uncapped > PRIOR_START_MATCHES_CAP * 5
