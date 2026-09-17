@@ -110,7 +110,12 @@ def backfill(
             summary[gameweek] = {"skipped": True}
             continue
 
-        projections = project_for_gameweek(connection, gameweek, horizon=horizon)
+        # A replay must not see today's injury list: those fields have no
+        # history, so using them would be avoiding players who got hurt
+        # weeks after the deadline being replayed.
+        projections = project_for_gameweek(
+            connection, gameweek, horizon=horizon, team_news=False
+        )
         if store_projections:
             save_projections(connection, gameweek, projections)
 

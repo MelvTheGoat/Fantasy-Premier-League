@@ -163,3 +163,113 @@ class TestPrune:
     def test_pruning_twice_finds_nothing_the_second_time(self, db):
         prune_projections(db, before_gameweek=4)
         assert prunable(db, before_gameweek=4) == 0
+
+
+class TestReset:
+    """Clearing decisions so a season can be replayed, without clearing the
+    observations a replay has to be judged against."""
+
+    def test_every_decision_goes(self, db):
+        from fplai.jobs.reset import DECISION_TABLES, reset_decisions
+
+        assert db.execute("SELECT COUNT(*) c FROM locked_picks").fetchone()["c"] > 0
+        reset_decisions(db)
+        for table in DECISION_TABLES:
+            count = db.execute(f"SELECT COUNT(*) c FROM {table}").fetchone()["c"]
+            assert count == 0, f"{table} still has rows"
+
+    def test_no_observation_is_touched(self, db):
+        """The replay has to face the same facts the original run did. If a
+        reset could drop a result or a price, the replayed season would be
+        graded against a different world."""
+        from fplai.jobs.reset import OBSERVED_TABLES, reset_decisions
+
+        before = {
+            t: db.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
+            for t in OBSERVED_TABLES
+        }
+        assert before["player_gameweek_stats"] > 0
+        assert before["player_prices"] > 0
+
+        reset_decisions(db)
+
+        after = {
+            t: db.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
+            for t in OBSERVED_TABLES
+        }
+        assert after == before
+
+    def test_a_replay_can_lock_the_same_gameweeks_again(self, db):
+        """`save_locked_picks` refuses to overwrite, which is the whole
+        no-leakage guarantee. A reset is the only thing that may lift it."""
+        from fplai.jobs.backfill import backfill
+        from fplai.jobs.reset import reset_decisions
+
+        reset_decisions(db)
+        summary = backfill(db, through_gameweek=3, horizon=3)
+        assert summary
+        assert not any(entry.get("skipped") for entry in summary.values())
+
+
+class TestReplaysSeeNoFuture:
+    """Three fields the FPL API publishes only in the present tense: whether a
+    player is injured, whether he is doubtful, and who takes the penalties.
+    None has any history, so a replayed gameweek that reads them is reading
+    news that had not happened yet.
+    """
+
+    def test_a_replay_does_not_see_todays_injuries(self, db):
+        from fplai.model.projections import build_histories
+
+        db.execute("UPDATE players SET status='i', chance_of_playing_next_round=0")
+
+        replay = build_histories(db, before_gameweek=2, team_news=False)
+        assert all(h.status == "a" for h in replay.values())
+        assert all(h.chance_of_playing is None for h in replay.values())
+
+        live = build_histories(db, before_gameweek=2, team_news=True)
+        assert all(h.status == "i" for h in live.values())
+
+    def test_a_replay_does_not_assume_todays_penalty_taker(self, db):
+        """Who takes penalties is a current fact. A player handed the job in
+        December did not have it in August."""
+        from fplai.model.projections import project_for_gameweek
+
+        db.execute("UPDATE players SET penalties_order = 1")
+
+        replay = project_for_gameweek(db, 2, horizon=1, team_news=False)
+        live = project_for_gameweek(db, 2, horizon=1, team_news=True)
+
+        replay_total = sum(v[0].expected_points for v in replay.values() if v)
+        live_total = sum(v[0].expected_points for v in live.values() if v)
+        assert live_total > replay_total
+
+    def test_the_backfill_replays_rather_than_remembers(self, db):
+        """The guarantee where it actually matters: the job that rebuilds a
+        past season asks for no team news at all."""
+        import inspect
+
+        from fplai.jobs import backfill as backfill_module
+
+        source = inspect.getsource(backfill_module.backfill)
+        assert "team_news=False" in source
+
+    def test_a_player_who_did_not_exist_yet_cannot_be_bought(self, db):
+        """A January signing has no price in a gameweek-one snapshot. Pricing
+        him at today's cost would put him in an August squad."""
+        from fplai.data.repository import load_roster_at_gameweek
+
+        # These fixtures snapshot prices at gameweek 3.
+        newcomer = db.execute("SELECT id FROM players LIMIT 1").fetchone()["id"]
+        db.execute("DELETE FROM player_prices WHERE player_id=? AND gameweek=3", (newcomer,))
+
+        roster = load_roster_at_gameweek(db, 3)
+        assert newcomer not in roster
+        assert len(roster) > 0
+
+    def test_a_gameweek_with_no_snapshot_at_all_still_returns_a_roster(self, db):
+        """An upcoming deadline whose refresh has not run yet has nothing to
+        be faithful to, so excluding everyone would be worse than useless."""
+        from fplai.data.repository import load_roster_at_gameweek
+
+        assert len(load_roster_at_gameweek(db, 38)) > 0

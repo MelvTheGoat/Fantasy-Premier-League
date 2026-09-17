@@ -70,11 +70,22 @@ def fixtures_by_team(
 def build_histories(
     connection: sqlite3.Connection,
     before_gameweek: int,
+    *,
+    team_news: bool = True,
 ) -> dict[int, PlayerHistory]:
     """Each player's record from gameweeks strictly before `before_gameweek`.
 
     Prices come from the snapshot for `before_gameweek` where one exists, so a
     replayed gameweek is priced as it was, not as it is now.
+
+    `team_news` controls the one thing the API only ever publishes in the
+    present tense: whether a player is injured, doubtful or suspended. Those
+    fields have no history, so replaying gameweek one with them switched on
+    means avoiding players who got injured in September -- hindsight, plainly.
+    A replay therefore sets this False and takes everyone as fit, which is
+    less information than the original run had rather than more. A pick made
+    before a deadline that has not arrived sets it True, because then the
+    news is genuinely current.
     """
     prices = {
         row["player_id"]: row["now_cost"]
@@ -171,8 +182,10 @@ def build_histories(
             prior_saves=int(past_row["saves"] or 0) if past_row else 0,
             prior_bps=int(past_row["bps"] or 0) if past_row else 0,
             price=prices.get(element, row["now_cost"]),
-            chance_of_playing=row["chance_of_playing_next_round"],
-            status=row["status"] or "a",
+            chance_of_playing=(
+                row["chance_of_playing_next_round"] if team_news else None
+            ),
+            status=(row["status"] or "a") if team_news else "a",
         )
 
     return histories
@@ -194,19 +207,25 @@ def project_for_gameweek(
     *,
     horizon: int | None = None,
     scoring: ScoringTable = DEFAULT_SCORING,
+    team_news: bool = True,
 ) -> dict[int, list[GameweekProjection]]:
     """Project every player over the horizon starting at `made_for_gameweek`.
 
     Only data from before `made_for_gameweek` is read. The returned lists are
     ordered by target gameweek, so the first entry is the gameweek being picked
     for and the rest are the planning horizon behind the Manager's decisions.
+
+    `team_news` is passed through to `build_histories`, and additionally
+    decides whether penalty duty is known: who takes them is published only
+    for today, so a replay must not assume the current taker held the job
+    back in August.
     """
     horizon = horizon or settings.planning_horizon
 
-    histories = build_histories(connection, made_for_gameweek)
+    histories = build_histories(connection, made_for_gameweek, team_news=team_news)
     rates = {element: estimate_rates(h) for element, h in histories.items()}
     form = load_team_form(connection, made_for_gameweek)
-    takers = penalty_takers(connection)
+    takers = penalty_takers(connection) if team_news else set()
 
     teams = {
         row["id"]: row["team_id"]

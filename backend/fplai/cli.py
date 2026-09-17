@@ -14,6 +14,7 @@
     fplai export --out DIR            write the whole site out as static files
     fplai prune [--before N]          drop lookahead projections already used
     fplai results                     real points for gameweeks already played
+    fplai reset --confirm             discard every decision and replay from GW1
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from .jobs.refresh import (
     refresh_player_histories,
     refresh_reference,
 )
+from .jobs.reset import reset_decisions
 from .jobs.results import refresh_results
 from .jobs.scheduler import TICK_SECONDS, run_forever, tick
 from .jobs.score import score_gameweek_for_all_models, score_season, season_summaries
@@ -120,6 +122,16 @@ def build_parser() -> argparse.ArgumentParser:
         "results", help="pull real points for gameweeks that have been played"
     )
 
+    reset = subparsers.add_parser(
+        "reset",
+        help="discard every model decision so the season can be replayed",
+    )
+    reset.add_argument(
+        "--confirm",
+        action="store_true",
+        help="required: this destroys every stored pick, transfer and score",
+    )
+
     prune = subparsers.add_parser(
         "prune", help="drop lookahead projections for gameweeks already played"
     )
@@ -170,6 +182,7 @@ def _dispatch(args, connection) -> int:
         "score": _score,
         "export": _export,
         "prune": _prune,
+        "reset": _reset,
     }
     if args.command in offline:
         return offline[args.command](args, connection)
@@ -292,6 +305,23 @@ def _export(args, connection) -> int:
         f"{args.out}: {counts['api_files']} API files, "
         f"{counts['frontend_files']} frontend files"
     )
+    return 0
+
+
+def _reset(args, connection) -> int:
+    if not args.confirm:
+        print(
+            "refusing to reset without --confirm: this discards every stored\n"
+            "pick, transfer, chip and score. The observed data -- results,\n"
+            "prices per gameweek, prior seasons -- is kept.",
+            file=sys.stderr,
+        )
+        return 1
+
+    removed = reset_decisions(connection)
+    for table, count in removed.items():
+        print(f"  cleared {count:>6} rows from {table}")
+    print("replay with `fplai backfill`")
     return 0
 
 

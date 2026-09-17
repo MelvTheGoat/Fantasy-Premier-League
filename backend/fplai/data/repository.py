@@ -54,10 +54,16 @@ def load_roster(connection: sqlite3.Connection) -> dict[int, Player]:
 def load_roster_at_gameweek(
     connection: sqlite3.Connection, gameweek: int
 ) -> dict[int, Player]:
-    """The roster as it was priced at a gameweek's deadline.
+    """The roster as it stood at a gameweek's deadline.
 
-    Falls back to the current price where no snapshot was taken, which only
-    happens for players who joined after that gameweek.
+    A player with no price in that gameweek's snapshot was not in the game
+    then, and is left out rather than priced at today's cost. Both reasons
+    matter: buying a January signing in gameweek one is not a legal squad, and
+    pricing him from today is hindsight about a player who did not exist yet.
+
+    When the gameweek has no snapshot at all -- an upcoming deadline whose
+    refresh has not run -- there is nothing to be faithful to, so the current
+    roster is returned whole.
     """
     prices = {
         row["player_id"]: row["now_cost"]
@@ -66,15 +72,19 @@ def load_roster_at_gameweek(
         )
     }
     roster = load_roster(connection)
+    if not prices:
+        return roster
+
     return {
         element: Player(
             element=player.element,
             position=player.position,
             team=player.team,
-            price=prices.get(element, player.price),
+            price=prices[element],
             web_name=player.web_name,
         )
         for element, player in roster.items()
+        if element in prices
     }
 
 
