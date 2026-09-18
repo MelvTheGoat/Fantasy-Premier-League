@@ -300,3 +300,51 @@ class TestManagerRecords:
         state = load_manager_state(db, 4)
         assert state["bank"] == 12
         assert state["free_transfers_after"] == 1
+
+
+class TestTheDeadlineIsWhatLocks(TestLockedPicks):
+    """A squad is provisional until its deadline and immutable after it. Both
+    halves matter: the first lets team news be acted on, the second is the
+    no-leakage guarantee the whole project rests on.
+    """
+
+    def _gameweek(self, db, gameweek, deadline_time):
+        db.execute(
+            "INSERT OR REPLACE INTO gameweeks (id, name, deadline_time, updated_at)"
+            " VALUES (?, ?, ?, datetime('now'))",
+            (gameweek, f"Gameweek {gameweek}", deadline_time),
+        )
+
+    def test_a_squad_can_be_rewritten_before_its_deadline(self, db):
+        from datetime import UTC, datetime, timedelta
+
+        lineup, squad = self.make()
+        now = datetime(2026, 9, 18, 9, 0, tzinfo=UTC)
+        self._gameweek(db, 8, (now + timedelta(hours=6)).isoformat())
+
+        save_locked_picks(db, "manager", 8, lineup, squad, prices={}, now=now)
+        save_locked_picks(db, "manager", 8, lineup, squad, prices={}, now=now)
+
+        stored = db.execute(
+            "SELECT COUNT(*) c FROM locked_picks WHERE model_id='manager' AND gameweek=8"
+        ).fetchone()["c"]
+        assert stored == len(squad.picks), "a rewrite must replace, not accumulate"
+
+    def test_a_squad_cannot_be_rewritten_after_its_deadline(self, db):
+        from datetime import UTC, datetime, timedelta
+
+        lineup, squad = self.make()
+        now = datetime(2026, 9, 18, 9, 0, tzinfo=UTC)
+        self._gameweek(db, 9, (now - timedelta(minutes=1)).isoformat())
+
+        save_locked_picks(db, "manager", 9, lineup, squad, prices={}, now=now)
+        with pytest.raises(LockedPicksExist):
+            save_locked_picks(db, "manager", 9, lineup, squad, prices={}, now=now)
+
+    def test_a_gameweek_with_no_deadline_is_treated_as_closed(self, db):
+        """Being unable to prove a write is legitimate is a reason to refuse
+        it, not to allow it."""
+        lineup, squad = self.make()
+        save_locked_picks(db, "manager", 99, lineup, squad, prices={})
+        with pytest.raises(LockedPicksExist):
+            save_locked_picks(db, "manager", 99, lineup, squad, prices={})

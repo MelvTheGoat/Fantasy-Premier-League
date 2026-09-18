@@ -32,6 +32,12 @@ def lock_gameweek(
     gameweek that is already locked is refused downstream, so running this
     twice changes nothing.
     """
+    # A gameweek picked more than once before its deadline -- refining as team
+    # news lands -- must not accumulate a transfer row per attempt. The picks
+    # themselves are replaced in place by `save_locked_picks`; these are not.
+    connection.execute("DELETE FROM transfers WHERE gameweek = ?", (gameweek,))
+    connection.execute("DELETE FROM chips_used WHERE gameweek = ?", (gameweek,))
+
     projections = project_for_gameweek(connection, gameweek, horizon=horizon)
     save_projections(connection, gameweek, projections)
 

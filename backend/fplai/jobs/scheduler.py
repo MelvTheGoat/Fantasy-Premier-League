@@ -48,10 +48,17 @@ from .seed import current_stage, seed
 
 logger = logging.getLogger(__name__)
 
-#: How long before a deadline the picks are made. Late enough that team news
-#: and a price change are in, early enough that several attempts fit inside the
-#: window if one fails.
-PICK_LEAD = timedelta(hours=2)
+#: How long before a deadline the picks are made.
+#:
+#: Eight hours, not two, because GitHub's scheduler is best-effort and drops
+#: most of a half-hourly cron on a public repository: observed gaps between
+#: runs are two to five hours. A two-hour window was missed outright about two
+#: times in five, and a missed deadline is a gameweek the Manager sat out.
+#:
+#: Picking early costs nothing now that a squad can be refined until the
+#: deadline: the first run inside the window banks a legal squad, and every
+#: run after it improves on that as team news arrives.
+PICK_LEAD = timedelta(hours=8)
 
 #: How close to a deadline a pick will still be started. Locking a squad after
 #: its own deadline would be reading the future, so the window closes first.
@@ -132,7 +139,12 @@ def _pick_is_due(
         return False
     if not PICK_CUTOFF <= when - moment <= PICK_LEAD:
         return False
-    return not _both_models_locked(connection, gameweek)
+
+    # Deliberately not "unless already locked". Before its deadline a squad is
+    # provisional, and re-picking it is what a human does when a striker is
+    # ruled out an hour before kick-off. It reads nothing the deadline had not
+    # already published, so it is not hindsight.
+    return True
 
 
 def _live_gameweek(

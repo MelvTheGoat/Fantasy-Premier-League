@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 
 from ..rules.constants import Chip, Position
 from ..rules.pricing import selling_price
@@ -229,15 +229,31 @@ def save_locked_picks(
     squad: Squad,
     prices: dict[int, int],
     reasons: dict[int, str] | None = None,
+    now: datetime | None = None,
 ) -> None:
-    """Write a gameweek's picks once and refuse to write them again.
+    """Write a gameweek's picks, refusing once its deadline has passed.
 
-    The refusal is the point: once a deadline has passed, regenerating picks
-    with hindsight would quietly invalidate every result after it.
+    The deadline is what locks a squad, not the act of writing it. Before the
+    deadline a squad is provisional and may be rewritten as often as team news
+    arrives -- that is what every human manager does, and it uses no
+    information the deadline had not already made available. After it, the
+    refusal is absolute: regenerating with hindsight would quietly invalidate
+    every result that followed.
+
+    A gameweek with no recorded deadline is treated as closed. Being unable to
+    prove a write is legitimate is a reason to refuse it, not to allow it.
     """
     if picks_are_locked(connection, model_id, gameweek):
-        raise LockedPicksExist(
-            f"{model_id} picks for GW{gameweek} are already locked and cannot be regenerated"
+        moment = now or datetime.now(UTC)
+        when = deadline(connection, gameweek)
+        if when is None or moment >= when:
+            raise LockedPicksExist(
+                f"{model_id} picks for GW{gameweek} are already locked and cannot "
+                "be regenerated"
+            )
+        connection.execute(
+            "DELETE FROM locked_picks WHERE model_id = ? AND gameweek = ?",
+            (model_id, gameweek),
         )
 
     reasons = reasons or {}

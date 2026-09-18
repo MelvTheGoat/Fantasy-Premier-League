@@ -180,7 +180,7 @@ def test_no_pick_is_made_before_the_window_opens(db):
     ready(db)
     add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
 
-    assert due_work(db, DEADLINE - timedelta(hours=6)) == []
+    assert due_work(db, DEADLINE - timedelta(hours=12)) == []
 
 
 def test_no_pick_is_made_once_its_own_deadline_has_passed(db):
@@ -194,12 +194,25 @@ def test_no_pick_is_made_once_its_own_deadline_has_passed(db):
     assert Job(Task.PICK, 8) not in due_work(db, DEADLINE + timedelta(minutes=1))
 
 
-def test_a_gameweek_that_is_already_locked_is_not_picked_again(db):
+def test_a_locked_gameweek_is_still_refined_until_its_deadline(db):
+    """Before the deadline a squad is provisional. Re-picking it is what a
+    human does when a striker is ruled out an hour before kick-off, and it
+    reads nothing the deadline had not already published."""
     ready(db)
     add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
     lock(db, 8)
 
-    assert due_work(db, DEADLINE - timedelta(hours=1)) == []
+    assert due_work(db, DEADLINE - timedelta(hours=1)) == [Job(Task.PICK, 8)]
+
+
+def test_once_the_deadline_passes_the_squad_is_not_touched_again(db):
+    """The other half of the same rule, and the one that matters: after the
+    deadline, rewriting picks would be hindsight."""
+    ready(db)
+    add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
+    lock(db, 8)
+
+    assert Job(Task.PICK, 8) not in due_work(db, DEADLINE + timedelta(minutes=1))
 
 
 def test_one_model_locked_is_not_enough(db):
