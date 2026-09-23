@@ -70,18 +70,20 @@ def add_gameweek(
     current: bool = False,
     next_up: bool = False,
     average: int | None = None,
+    checked: bool = False,
     with_fixture: bool = True,
 ) -> None:
     connection.execute(
         "INSERT INTO gameweeks (id, name, deadline_time, is_current, is_next,"
-        " finished, average_entry_score, last_kickoff_time, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)",
+        " finished, data_checked, average_entry_score, last_kickoff_time,"
+        " updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
         (
             gameweek,
             f"Gameweek {gameweek}",
             deadline.isoformat(),
             int(current),
             int(next_up),
+            int(checked),
             average,
             last_kickoff.isoformat() if last_kickoff else None,
             utcnow(),
@@ -127,6 +129,20 @@ def add_score(connection, gameweek: int, points: int = 55) -> None:
         )
 
 
+def fresh(connection, moment: datetime) -> None:
+    """Say the reference data was pulled a minute before `moment`.
+
+    A fixture that writes its rows now and then asks what is due ten days
+    later is describing a database nobody has looked at for ten days, and the
+    scheduler is right to answer "go and look again". When the data was last
+    pulled is part of describing the world, not a workaround.
+    """
+    connection.execute(
+        "UPDATE gameweeks SET updated_at = ?",
+        ((moment - timedelta(minutes=1)).isoformat(),),
+    )
+
+
 def ready(connection, played: int | None = None) -> None:
     """The minimum that makes a database look seeded rather than empty."""
     add_player(connection)
@@ -157,11 +173,14 @@ def test_seeding_displaces_every_other_job(db):
 
 def test_a_seeded_database_has_nothing_to_do_between_gameweeks(db):
     ready(db, played=7)
-    add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, average=52)
+    add_gameweek(
+        db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, average=52, checked=True
+    )
     lock(db, 7)
     add_gameweek(db, 8, deadline=DEADLINE + timedelta(days=7), next_up=True)
 
     quiet = LAST_KICKOFF + timedelta(days=2)
+    fresh(db, quiet)
     assert due_work(db, quiet) == []
 
 
@@ -173,6 +192,7 @@ def test_picks_are_made_in_the_hours_before_a_deadline(db):
     add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
 
     an_hour_before = DEADLINE - timedelta(hours=1)
+    fresh(db, an_hour_before)
     assert due_work(db, an_hour_before) == [Job(Task.PICK, 8)]
 
 
@@ -180,7 +200,9 @@ def test_no_pick_is_made_before_the_window_opens(db):
     ready(db)
     add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
 
-    assert due_work(db, DEADLINE - timedelta(hours=12)) == []
+    too_early = DEADLINE - timedelta(hours=12)
+    fresh(db, too_early)
+    assert due_work(db, too_early) == []
 
 
 def test_no_pick_is_made_once_its_own_deadline_has_passed(db):
@@ -202,7 +224,9 @@ def test_a_locked_gameweek_is_still_refined_until_its_deadline(db):
     add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
     lock(db, 8)
 
-    assert due_work(db, DEADLINE - timedelta(hours=1)) == [Job(Task.PICK, 8)]
+    an_hour_before = DEADLINE - timedelta(hours=1)
+    fresh(db, an_hour_before)
+    assert due_work(db, an_hour_before) == [Job(Task.PICK, 8)]
 
 
 def test_once_the_deadline_passes_the_squad_is_not_touched_again(db):
@@ -226,7 +250,9 @@ def test_one_model_locked_is_not_enough(db):
         (utcnow(),),
     )
 
-    assert due_work(db, DEADLINE - timedelta(hours=1)) == [Job(Task.PICK, 8)]
+    an_hour_before = DEADLINE - timedelta(hours=1)
+    fresh(db, an_hour_before)
+    assert due_work(db, an_hour_before) == [Job(Task.PICK, 8)]
 
 
 # --- live ------------------------------------------------------------------
@@ -238,6 +264,7 @@ def test_live_points_are_pulled_while_the_gameweek_is_being_played(db):
     lock(db, 7)
 
     mid_gameweek = DEADLINE + timedelta(hours=4)
+    fresh(db, mid_gameweek)
     assert due_work(db, mid_gameweek) == [Job(Task.LIVE, 7)]
 
 
@@ -248,16 +275,42 @@ def test_live_polling_continues_between_the_last_match_and_lockdown(db):
     lock(db, 7)
 
     after_the_last_match = LAST_KICKOFF + timedelta(hours=3)
+    fresh(db, after_the_last_match)
     assert due_work(db, after_the_last_match) == [Job(Task.LIVE, 7)]
 
 
-def test_live_polling_stops_at_lockdown(db):
+def test_live_polling_continues_past_lockdown_until_fpl_confirms(db):
+    """Lockdown is a time this code works out; `data_checked` is FPL saying so.
+
+    Handing a gameweek from live polling to finalisation at a computed moment
+    left a gap that neither job owned, and a gameweek sat in it at nought for
+    five days. Polling now overlaps finalisation rather than giving way to it.
+    """
     ready(db, played=7)
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
     lock(db, 7)
 
-    jobs = due_work(db, LOCKDOWN + timedelta(minutes=1))
-    assert Job(Task.LIVE, 7) not in jobs
+    after_lockdown = LOCKDOWN + timedelta(minutes=1)
+    fresh(db, after_lockdown)
+    assert Job(Task.LIVE, 7) in due_work(db, after_lockdown)
+
+
+def test_live_polling_stops_once_fpl_has_checked_the_gameweek(db):
+    ready(db, played=7)
+    add_gameweek(
+        db,
+        7,
+        deadline=DEADLINE,
+        last_kickoff=LAST_KICKOFF,
+        current=True,
+        average=48,
+        checked=True,
+    )
+    lock(db, 7)
+
+    after_lockdown = LOCKDOWN + timedelta(minutes=1)
+    fresh(db, after_lockdown)
+    assert due_work(db, after_lockdown) == []
 
 
 # --- finalising ------------------------------------------------------------
@@ -268,19 +321,31 @@ def test_a_gameweek_past_lockdown_is_finalised(db):
     add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
     lock(db, 7)
 
-    assert due_work(db, LOCKDOWN + timedelta(minutes=1)) == [Job(Task.FINALISE, 7)]
+    after_lockdown = LOCKDOWN + timedelta(minutes=1)
+    fresh(db, after_lockdown)
+    assert due_work(db, after_lockdown) == [
+        Job(Task.FINALISE, 7),
+        Job(Task.LIVE, 7),
+    ]
 
 
-def test_a_gameweek_with_an_official_average_is_left_alone(db):
-    """`average_entry_score` only exists once FPL has checked the gameweek,
-    which is the same moment its points stop moving."""
+def test_a_checked_gameweek_is_left_alone(db):
+    """`data_checked` is FPL's own statement that the points have settled."""
     ready(db, played=7)
     add_gameweek(
-        db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, average=48, current=True
+        db,
+        7,
+        deadline=DEADLINE,
+        last_kickoff=LAST_KICKOFF,
+        average=48,
+        checked=True,
+        current=True,
     )
     lock(db, 7)
 
-    assert due_work(db, LOCKDOWN + timedelta(hours=5)) == []
+    settled = LOCKDOWN + timedelta(hours=5)
+    fresh(db, settled)
+    assert due_work(db, settled) == []
 
 
 def test_finalising_comes_before_the_next_gameweeks_picks(db):
@@ -291,8 +356,10 @@ def test_finalising_comes_before_the_next_gameweeks_picks(db):
     lock(db, 7)
     add_gameweek(db, 8, deadline=LOCKDOWN + timedelta(hours=2), next_up=True)
 
-    jobs = due_work(db, LOCKDOWN + timedelta(minutes=30))
-    assert jobs == [Job(Task.FINALISE, 7), Job(Task.PICK, 8)]
+    moment = LOCKDOWN + timedelta(minutes=30)
+    fresh(db, moment)
+    jobs = due_work(db, moment)
+    assert jobs == [Job(Task.FINALISE, 7), Job(Task.PICK, 8), Job(Task.LIVE, 7)]
 
 
 # --- catching up -----------------------------------------------------------
@@ -345,10 +412,16 @@ def test_a_failing_job_does_not_stop_the_ones_after_it(db, monkeypatch):
             raise RuntimeError("the API is having a moment")
 
     monkeypatch.setattr(scheduler, "run_job", run)
-    done = scheduler.tick(db, StubClient(), LOCKDOWN + timedelta(minutes=30))
+    moment = LOCKDOWN + timedelta(minutes=30)
+    fresh(db, moment)
+    done = scheduler.tick(db, StubClient(), moment)
 
-    assert attempted == [Job(Task.FINALISE, 7), Job(Task.PICK, 8)]
-    assert done == [Job(Task.PICK, 8)]
+    assert attempted == [
+        Job(Task.FINALISE, 7),
+        Job(Task.PICK, 8),
+        Job(Task.LIVE, 7),
+    ]
+    assert done == [Job(Task.PICK, 8), Job(Task.LIVE, 7)]
 
 
 # --- what the site says while it is filling itself in ----------------------
@@ -392,6 +465,7 @@ def test_before_the_first_deadline_an_empty_picks_table_is_the_finished_state(db
     pre_season = DEADLINE - timedelta(days=10)
 
     assert seed.current_stage(db, pre_season) == "ready"
+    fresh(db, pre_season)
     assert due_work(db, pre_season) == []
 
 
@@ -499,3 +573,223 @@ class TestAStaleScoreIsNoticed:
         add_result(db, 7)
 
         assert gameweeks_with_a_stale_score(db) == []
+
+
+# --- the five days nothing happened ----------------------------------------
+
+
+class TestTheSchedulerCanNoticeTheWorldMovedOn:
+    """The failure this guards against contained no error at all.
+
+    Every rule about what is due is a question asked of this database, and
+    nothing refreshed the database unless some rule already believed something
+    was happening. So once the stored view of the season fell behind, the
+    scheduler had no way to find out: twenty consecutive runs decided there
+    was nothing to do, reported success, and left a gameweek that had been
+    played days earlier showing nought.
+    """
+
+    def test_stale_reference_data_is_refreshed_on_its_own(self, db):
+        ready(db, played=7)
+        add_gameweek(
+            db,
+            7,
+            deadline=DEADLINE,
+            last_kickoff=LAST_KICKOFF,
+            average=52,
+            checked=True,
+        )
+        lock(db, 7)
+
+        quiet = LAST_KICKOFF + timedelta(days=2)
+        fresh(db, quiet)
+        assert due_work(db, quiet) == []
+
+        assert due_work(db, quiet + scheduler.REFRESH_INTERVAL) == [Job(Task.REFRESH)]
+
+    def test_a_zero_average_is_not_a_checked_gameweek(self, db):
+        """The bug itself, in one line of data.
+
+        `average_entry_score` was the marker for "FPL has settled this
+        gameweek", on the reasoning that the field only appears once it has.
+        The API returns a literal 0 while the gameweek is in progress, so the
+        first refresh after the deadline wrote a number into the marker and
+        the gameweek could never be finalised again.
+        """
+        ready(db, played=5)
+        add_gameweek(
+            db, 5, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, average=0, current=True
+        )
+        lock(db, 5)
+
+        days_later = LOCKDOWN + timedelta(days=5)
+        fresh(db, days_later)
+        jobs = due_work(db, days_later)
+
+        assert Job(Task.FINALISE, 5) in jobs
+        assert Job(Task.LIVE, 5) in jobs
+
+    def test_a_gameweek_the_current_flag_has_moved_past_is_still_scored(self, db):
+        """`is_current` advances at the next deadline whether or not the
+        gameweek it leaves behind was ever finished."""
+        ready(db, played=5)
+        add_gameweek(db, 5, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, average=0)
+        lock(db, 5)
+        add_gameweek(
+            db, 6, deadline=LAST_KICKOFF + timedelta(days=1), current=True
+        )
+
+        moment = LAST_KICKOFF + timedelta(days=2)
+        fresh(db, moment)
+        assert Job(Task.LIVE, 5) in due_work(db, moment)
+
+
+class TestATickActsOnWhatItLearns:
+    def test_work_revealed_by_a_job_is_run_in_the_same_tick(self, db, monkeypatch):
+        """A refresh that learns a gameweek has been played makes a
+        finalisation due that was not due when the tick began. Reading what is
+        owed once, at the top, drops it silently."""
+        ready(db, played=7)
+        add_gameweek(db, 7, deadline=DEADLINE, current=True)  # no kickoff known yet
+        lock(db, 7)
+
+        moment = LOCKDOWN + timedelta(hours=1)
+        attempted: list[Job] = []
+
+        def run(connection, client, job):
+            attempted.append(job)
+            if job.task is Task.REFRESH:
+                connection.execute(
+                    "UPDATE gameweeks SET last_kickoff_time = ?, updated_at = ?"
+                    " WHERE id = 7",
+                    (
+                        LAST_KICKOFF.isoformat(),
+                        (moment - timedelta(minutes=1)).isoformat(),
+                    ),
+                )
+
+        monkeypatch.setattr(scheduler, "run_job", run)
+        done = scheduler.tick(db, StubClient(), moment)
+
+        assert Job(Task.REFRESH) in done
+        assert Job(Task.FINALISE, 7) in done
+
+    def test_a_job_is_attempted_at_most_once_per_tick(self, db, monkeypatch):
+        """A job that stays due however often it runs must not hold the loop
+        open for ever."""
+        ready(db, played=7)
+        add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
+        lock(db, 7)
+
+        moment = LOCKDOWN + timedelta(minutes=1)
+        fresh(db, moment)
+        attempted: list[Job] = []
+        monkeypatch.setattr(
+            scheduler, "run_job", lambda c, cl, job: attempted.append(job)
+        )
+
+        scheduler.tick(db, StubClient(), moment)
+        assert attempted == [Job(Task.FINALISE, 7), Job(Task.LIVE, 7)]
+
+
+class TestHoldingTheLineWhenTheCronDoesNot:
+    """GitHub runs a scheduled workflow on a public repository when it suits
+    GitHub: measured gaps on this one were two to seven hours against a
+    half-hourly request. Most of the week that costs nothing, because most of
+    the week nothing is happening. It costs a gameweek in the hours around a
+    deadline, so a run that lands near one stays alive instead of betting on
+    the next arriving in time.
+    """
+
+    def test_nothing_imminent_means_one_tick_and_out(self, db):
+        ready(db, played=7)
+        add_gameweek(
+            db,
+            7,
+            deadline=DEADLINE,
+            last_kickoff=LAST_KICKOFF,
+            average=52,
+            checked=True,
+        )
+        lock(db, 7)
+        add_gameweek(db, 8, deadline=DEADLINE + timedelta(days=7), next_up=True)
+
+        assert scheduler.watch_reason(db, LAST_KICKOFF + timedelta(days=2)) is None
+
+    def test_a_gameweek_being_scored_is_not_worth_waiting_for(self, db):
+        """Though it is the other moment things are moving.
+
+        The site is published in a step that runs after the scheduler, so a
+        run that stays alive for four hours publishes nothing for four hours.
+        Waiting through a gameweek buys a fresher database at the precise
+        cost of a staler page, and the page is the part anyone sees.
+        """
+        ready(db, played=7)
+        add_gameweek(db, 7, deadline=DEADLINE, last_kickoff=LAST_KICKOFF, current=True)
+        lock(db, 7)
+
+        moment = LAST_KICKOFF + timedelta(hours=2)
+        assert Job(Task.LIVE, 7) in due_work(db, moment)  # the work still happens
+        assert scheduler.watch_reason(db, moment) is None  # it just does not linger
+
+    def test_an_approaching_deadline_is_worth_waiting_for(self, db):
+        ready(db)
+        add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
+
+        reason = scheduler.watch_reason(db, DEADLINE - timedelta(hours=3))
+        assert reason == "GW8 picks are due"
+
+    def test_the_vigil_ends_at_the_deadline(self, db, monkeypatch):
+        """Which is the point: the last pick before a deadline is the one made
+        with the most team news, and a dropped cron must not be what decides
+        whether it happens."""
+        ready(db)
+        add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
+
+        calls: list[None] = []
+
+        def clock():
+            calls.append(None)
+            # Three hours out, creeping towards the deadline an hour at a time.
+            return DEADLINE - timedelta(hours=3) + timedelta(hours=len(calls) // 2)
+
+        ticks: list[object] = []
+        monkeypatch.setattr(
+            scheduler, "tick", lambda *a, **k: ticks.append(None) or []
+        )
+        slept: list[float] = []
+        scheduler.watch(db, StubClient(), clock=clock, sleep=slept.append)
+
+        # Ticked its way to the deadline and then stopped of its own accord:
+        # three hours out, two hours out, one hour out, and then the deadline
+        # itself, which is where the pick window shuts.
+        assert len(ticks) == 3
+        assert slept == [scheduler.WATCH_INTERVAL] * 2
+
+    def test_the_budget_ends_the_vigil(self, db, monkeypatch):
+        """A job killed for overrunning would lose the work it had just done,
+        because the season is stored in a later step. The vigil gives up well
+        short of that."""
+        ready(db)
+        add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
+
+        start = DEADLINE - timedelta(hours=8)
+        calls: list[None] = []
+
+        def clock():
+            calls.append(None)
+            return start + timedelta(hours=len(calls))
+
+        monkeypatch.setattr(scheduler, "tick", lambda *a, **k: [])
+        slept: list[float] = []
+        scheduler.watch(
+            db,
+            StubClient(),
+            budget=timedelta(hours=4),
+            clock=clock,
+            sleep=slept.append,
+        )
+
+        # The deadline is still ahead, so only the budget can have stopped it.
+        assert scheduler.watch_reason(db, start) == "GW8 picks are due"
+        assert len(slept) == 1

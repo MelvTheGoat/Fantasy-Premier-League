@@ -153,6 +153,35 @@ def gameweeks_underway(
     ]
 
 
+def reference_refreshed_at(connection: sqlite3.Connection) -> datetime | None:
+    """When the reference data was last pulled from the API.
+
+    The scheduler decides what is due by reading this database, so every rule
+    it applies is only as true as the last refresh. Exposing the age of that
+    refresh is what lets it notice that it is reasoning about a stale world
+    and go and look again.
+    """
+    row = connection.execute(
+        "SELECT MAX(updated_at) AS seen FROM gameweeks"
+    ).fetchone()
+    if not row or not row["seen"]:
+        return None
+    return _parse(row["seen"])
+
+
+def gameweek_is_checked(connection: sqlite3.Connection, gameweek: int) -> bool:
+    """Whether FPL has confirmed a gameweek's points are settled.
+
+    `data_checked` is the API's own statement that it has finished with a
+    gameweek, which makes it the one honest marker for "final". Points, bonus
+    and the official average all stop moving at that moment and not before.
+    """
+    row = connection.execute(
+        "SELECT data_checked FROM gameweeks WHERE id = ?", (gameweek,)
+    ).fetchone()
+    return bool(row and row["data_checked"])
+
+
 def gameweek_average(connection: sqlite3.Connection, gameweek: int) -> int | None:
     """The official FPL average, straight from `average_entry_score`."""
     row = connection.execute(
@@ -435,6 +464,8 @@ __all__ = [
     "finished_gameweeks",
     "gameweek_average",
     "gameweek_averages",
+    "gameweek_is_checked",
+    "gameweeks_underway",
     "last_kickoff",
     "load_chips_used",
     "load_locked_lineup",
@@ -446,6 +477,7 @@ __all__ = [
     "load_transfers",
     "next_gameweek",
     "picks_are_locked",
+    "reference_refreshed_at",
     "save_chip_used",
     "save_locked_picks",
     "save_manager_state",
