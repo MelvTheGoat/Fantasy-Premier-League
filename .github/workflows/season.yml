@@ -6,6 +6,12 @@
 # lock a squad before a deadline, poll live points, take the final scores --
 # does it, and publishes the result to Pages.
 #
+# "Every half hour" is what it asks for rather than what it gets. GitHub runs
+# these on a public repository when it has room, and the measured gaps on this
+# one were two to seven hours. Nothing here depends on a particular run firing:
+# the scheduler decides what is owed by reading the database against a clock,
+# so a run that has not happened for six hours simply finds six hours of work.
+#
 # The season's record is a SQLite file, which has to outlive the runner. It
 # lives on the `season-data` branch, force-pushed as a single commit each time
 # rather than appended to. That is deliberate: at half-hourly runs, keeping the
@@ -17,10 +23,17 @@ name: Season
 
 on:
   schedule:
-    # Every half hour. The picking window is two hours wide, so several runs
-    # fall inside it even when GitHub's scheduler is running late -- which it
-    # routinely is, and which is why this does not try to aim at deadlines.
-    - cron: '*/30 * * * *'
+    # Every half hour, and deliberately not on the hour or the half hour.
+    # GitHub runs scheduled workflows on public repositories when it has the
+    # capacity, and :00 and :30 are the two minutes every cron in the world
+    # asks for. Seven past and thirty-seven past ask for the same frequency
+    # at a quieter moment.
+    #
+    # It is still best-effort, and the schedule is not what guarantees a
+    # deadline is met: the pick window is eight hours wide, and a run landing
+    # anywhere inside it stays alive until the deadline rather than exiting
+    # and hoping another arrives. See `watch_reason` in the scheduler.
+    - cron: '7,37 * * * *'
   # Republish when the site's code changes, not only when the data does.
   push:
     branches: [main]
@@ -49,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.redeploy.outputs.page_url }}
 
     steps:
       - uses: actions/checkout@v4
@@ -77,8 +90,13 @@ jobs:
       - run: pip install ./backend
 
       - name: Do whatever is due
+        # The scheduler stops itself after four hours; this is the backstop
+        # for a run that somehow does not. It has to stay well under the job's
+        # own ceiling, because the season is stored in a step further down and
+        # a job killed for overrunning would take that work with it.
+        timeout-minutes: 300
         run: |
-          fplai schedule --once
+          fplai schedule --watch
           # Leaves the database's own account of itself in the log, which is
           # the first thing worth seeing when a run goes wrong.
           fplai status
@@ -139,3 +157,14 @@ jobs:
 
       - uses: actions/deploy-pages@v4
         id: deploy
+        continue-on-error: true
+
+      # A run once lost its publish to a timeout fetching the OIDC token,
+      # with the season already committed and the site already built. The
+      # next scheduled run was three hours away, so for three hours the page
+      # showed a gameweek that had moved on. Nothing about that is worth
+      # waiting for: try again.
+      - name: Publish again if the first attempt did not take
+        if: steps.deploy.outcome == 'failure'
+        id: redeploy
+        uses: actions/deploy-pages@v4
