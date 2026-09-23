@@ -10,7 +10,7 @@
     fplai finalise --gameweek N       final points and the official average
     fplai status                      what the database currently knows
     fplai seed                        fill an empty database from scratch
-    fplai schedule [--once]           run the scheduler, or a single tick
+    fplai schedule [--once|--watch]   run the scheduler, a tick, or a vigil
     fplai export --out DIR            write the whole site out as static files
     fplai prune [--before N]          drop lookahead projections already used
     fplai results                     real points for gameweeks already played
@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 from .config import settings
@@ -45,7 +46,14 @@ from .jobs.refresh import (
 )
 from .jobs.reset import reset_decisions
 from .jobs.results import refresh_results
-from .jobs.scheduler import TICK_SECONDS, run_forever, tick
+from .jobs.scheduler import (
+    TICK_SECONDS,
+    WATCH_BUDGET,
+    WATCH_INTERVAL,
+    run_forever,
+    tick,
+    watch,
+)
 from .jobs.score import score_gameweek_for_all_models, score_season, season_summaries
 from .jobs.seed import seed, setup_progress
 
@@ -99,12 +107,23 @@ def build_parser() -> argparse.ArgumentParser:
         "schedule", help="run the scheduler in the foreground"
     )
     schedule.add_argument(
-        "--interval", type=int, default=TICK_SECONDS, help="seconds between ticks"
+        "--interval", type=int, help="seconds between ticks"
     )
     schedule.add_argument(
         "--once",
         action="store_true",
         help="run a single tick and exit, for an external scheduler",
+    )
+    schedule.add_argument(
+        "--watch",
+        action="store_true",
+        help="tick until nothing is imminent, for a scheduler that drops runs",
+    )
+    schedule.add_argument(
+        "--budget-minutes",
+        type=int,
+        default=int(WATCH_BUDGET.total_seconds() // 60),
+        help="how long --watch may stay alive before leaving it to the next run",
     )
 
     export = subparsers.add_parser(
@@ -167,11 +186,12 @@ def main(argv: list[str] | None = None) -> int:
 def _dispatch(args, connection) -> int:
     """Route to the job. Commands that need the network open a client; the
     rest work entirely from what has already been ingested."""
-    if args.command == "schedule" and not args.once:
+    if args.command == "schedule" and not (args.once or args.watch):
         # Opens its own connection and its own client each tick, because it
         # outlives this call rather than being one job.
-        print(f"scheduler running, ticking every {args.interval}s -- ^C to stop")
-        run_forever(interval=args.interval)
+        interval = args.interval or TICK_SECONDS
+        print(f"scheduler running, ticking every {interval}s -- ^C to stop")
+        run_forever(interval=interval)
         return 0
 
     offline = {
@@ -224,7 +244,15 @@ def _dispatch(args, connection) -> int:
             return 0
 
         if args.command == "schedule":
-            done = tick(connection, client)
+            if args.watch:
+                done = watch(
+                    connection,
+                    client,
+                    budget=timedelta(minutes=args.budget_minutes),
+                    interval=args.interval or WATCH_INTERVAL,
+                )
+            else:
+                done = tick(connection, client)
             print(", ".join(str(job) for job in done) if done else "nothing due")
             return 0
 
