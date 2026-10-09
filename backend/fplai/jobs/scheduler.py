@@ -52,15 +52,22 @@ logger = logging.getLogger(__name__)
 
 #: How long before a deadline the picks are made.
 #:
-#: Eight hours, not two, because GitHub's scheduler is best-effort and drops
-#: most of a half-hourly cron on a public repository: observed gaps between
-#: runs are two to five hours. A two-hour window was missed outright about two
-#: times in five, and a missed deadline is a gameweek the Manager sat out.
+#: Sixteen hours, because GitHub's scheduler is best-effort and drops most of
+#: a half-hourly cron on a public repository. Measured over twelve days and
+#: fifty-nine runs the gaps were a median of 320 minutes, a 90th percentile of
+#: 434, and a longest of 554 -- nine hours and a quarter.
 #:
-#: Picking early costs nothing now that a squad can be refined until the
-#: deadline: the first run inside the window banks a legal squad, and every
-#: run after it improves on that as team news arrives.
-PICK_LEAD = timedelta(hours=8)
+#: Against an eight-hour window two of those gaps were long enough to cover it
+#: whole, which put the chance of a deadline passing with no run inside it at
+#: roughly one in two hundred. That reads like a rounding error until you ask
+#: what it costs: a missed deadline is a gameweek the Manager never entered,
+#: and unlike a late score there is no repairing it afterwards. Sixteen hours
+#: is almost twice the longest gap on record.
+#:
+#: Picking this early costs nothing, because a squad stays provisional until
+#: its deadline: the first run inside the window banks a legal squad and every
+#: run after it improves on that. What it buys is that the squad exists at all.
+PICK_LEAD = timedelta(hours=16)
 
 #: How close to a deadline a pick will still be started. Locking a squad after
 #: its own deadline would be reading the future, so the window closes first.
@@ -80,6 +87,18 @@ TICK_SECONDS = 300
 #: happened. It sat idle for five days that way, holding a gameweek at nought
 #: while the matches it was waiting for had long since been played.
 REFRESH_INTERVAL = timedelta(hours=3)
+
+#: How long before a deadline a run is worth keeping alive for, as opposed to
+#: merely picking in.
+#:
+#: Narrower than the pick window on purpose, because the two answer different
+#: questions. The pick window is wide so that a squad is certainly banked, and
+#: a run landing at its far edge has nothing to wait around for -- the news
+#: that matters has not happened yet, and sixteen hours of runners taking
+#: turns to sleep would publish nothing while they did it. The vigil is for
+#: the final stretch, where team news actually lands and the last pick before
+#: the deadline is the one that counts.
+WATCH_LEAD = timedelta(hours=8)
 
 #: How long a single run will keep ticking rather than exiting, when there is
 #: something worth staying alive for. Well under GitHub's six-hour ceiling on
@@ -382,7 +401,7 @@ def watch_reason(
     upcoming = next_gameweek(connection)
     if upcoming is not None:
         when = deadline(connection, upcoming)
-        if when is not None and PICK_CUTOFF <= when - moment <= PICK_LEAD:
+        if when is not None and PICK_CUTOFF <= when - moment <= WATCH_LEAD:
             return f"GW{upcoming} picks are due"
 
     return None
@@ -464,6 +483,7 @@ __all__ = [
     "REFRESH_INTERVAL",
     "TICK_SECONDS",
     "WATCH_BUDGET",
+    "WATCH_LEAD",
     "WATCH_INTERVAL",
     "Job",
     "Task",

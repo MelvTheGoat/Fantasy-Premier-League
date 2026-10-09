@@ -143,6 +143,22 @@ def fresh(connection, moment: datetime) -> None:
     )
 
 
+def stale(connection, moment: datetime) -> None:
+    """Say the reference data has not been pulled since well before `moment`.
+
+    The counterpart to `fresh`, and needed for the same reason. A fixture that
+    leaves `updated_at` at the real clock's now is not describing stale data;
+    it is describing data written at whatever moment the suite happened to run,
+    which reads as stale or current depending on the date. One such test
+    passed for two weeks and then quietly stopped testing anything when the
+    moment it asked about slipped into the past.
+    """
+    connection.execute(
+        "UPDATE gameweeks SET updated_at = ?",
+        ((moment - scheduler.REFRESH_INTERVAL - timedelta(minutes=1)).isoformat(),),
+    )
+
+
 def ready(connection, played: int | None = None) -> None:
     """The minimum that makes a database look seeded rather than empty."""
     add_player(connection)
@@ -200,7 +216,7 @@ def test_no_pick_is_made_before_the_window_opens(db):
     ready(db)
     add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
 
-    too_early = DEADLINE - timedelta(hours=12)
+    too_early = DEADLINE - timedelta(hours=20)
     fresh(db, too_early)
     assert due_work(db, too_early) == []
 
@@ -654,6 +670,7 @@ class TestATickActsOnWhatItLearns:
         lock(db, 7)
 
         moment = LOCKDOWN + timedelta(hours=1)
+        stale(db, moment)
         attempted: list[Job] = []
 
         def run(connection, client, job):
@@ -731,6 +748,25 @@ class TestHoldingTheLineWhenTheCronDoesNot:
         moment = LAST_KICKOFF + timedelta(hours=2)
         assert Job(Task.LIVE, 7) in due_work(db, moment)  # the work still happens
         assert scheduler.watch_reason(db, moment) is None  # it just does not linger
+
+    def test_the_vigil_is_narrower_than_the_pick_window(self, db):
+        """They answer different questions, so they are different numbers.
+
+        The pick window is wide so a squad is certainly banked against a cron
+        that drops most of its runs. A run landing at its far edge has nothing
+        to wait around for: the team news that decides the final squad has not
+        happened yet, and sixteen hours of runners taking turns to sleep would
+        publish nothing while they did it.
+        """
+        ready(db)
+        add_gameweek(db, 8, deadline=DEADLINE, next_up=True)
+
+        far_edge = DEADLINE - scheduler.PICK_LEAD + timedelta(minutes=1)
+        fresh(db, far_edge)
+        assert due_work(db, far_edge) == [Job(Task.PICK, 8)]  # pick, yes
+        assert scheduler.watch_reason(db, far_edge) is None   # linger, no
+
+        assert scheduler.WATCH_LEAD < scheduler.PICK_LEAD
 
     def test_an_approaching_deadline_is_worth_waiting_for(self, db):
         ready(db)
